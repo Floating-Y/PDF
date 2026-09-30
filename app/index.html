@@ -59,7 +59,10 @@
 
     <div class="tb-group">
       <div class="seg" id="toolGroup">
-        <button data-tool="select" class="active" title="选择/移动标注" disabled>
+        <button data-tool="hand" title="手型工具：拖动平移（H，或按住空格临时使用）" disabled>
+          <svg viewBox="0 0 16 16"><path d="M5.3 8.8V4.6a.9.9 0 0 1 1.8 0v3.1M7.1 7.7V3.3a.9.9 0 0 1 1.8 0v4.4M8.9 7.8V4a.9.9 0 0 1 1.8 0v5.3c0 2.9-1.7 4.9-4.5 4.9-2 0-3.1-.9-4-2.5L1.6 9.6c-.4-.7.4-1.5 1.1-1.1l1.9 1.2"/></svg>
+        </button>
+        <button data-tool="select" class="active" title="选择/移动标注（Ctrl+拖拽 = 框选区域放大）" disabled>
           <svg viewBox="0 0 16 16"><path d="M8 2.5v11M2.5 8h11M8 2.5 6.5 4M8 2.5 9.5 4M8 13.5 6.5 12M8 13.5 9.5 12M2.5 8 4 6.5M2.5 8 4 9.5M13.5 8 12 6.5M13.5 8 12 9.5"/></svg>
         </button>
         <button data-tool="edittext" title="编辑文字模式：直接点击页面上的文字行，原地修改" disabled>
@@ -174,6 +177,9 @@
         </div>
       </div>
       <div id="selBar" hidden>
+        <button data-act="copy" title="复制选中的文字（Ctrl+C）">
+          <svg viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.3"/><path d="M10.5 5.3V3.6a1.1 1.1 0 0 0-1.1-1.1H3.6a1.1 1.1 0 0 0-1.1 1.1v5.8a1.1 1.1 0 0 0 1.1 1.1h1.7"/></svg>复制
+        </button>
         <button data-act="hl" title="高亮选中的文字">
           <svg viewBox="0 0 16 16"><path d="M9 9.5l4-4a1.06 1.06 0 0 0-1.5-1.5l-4 4z"/><path d="M7 9.5 4.5 12l-.5 2 2-.5L8.5 11"/></svg>高亮
         </button>
@@ -195,6 +201,9 @@
       <span>放大 / 缩小</span><kbd>Ctrl+= / Ctrl+-</kbd>
       <span>缩放（连续）</span><kbd>Ctrl+滚轮</kbd>
       <span>撤销 / 重做</span><kbd>Ctrl+Z / Ctrl+Y</kbd>
+      <span>手型工具 / 回到选择工具</span><kbd>H / Esc</kbd>
+      <span>临时手型平移（按住拖动）</span><kbd>Space</kbd>
+      <span>框选区域放大</span><kbd>Ctrl+拖拽</kbd>
       <span>保存（桌面版写回原文件）</span><kbd>Ctrl+S</kbd>
       <span>打印</span><kbd>Ctrl+P</kbd>
       <span>删除选中标注</span><kbd>Del</kbd>

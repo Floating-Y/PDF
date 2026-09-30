@@ -205,10 +205,13 @@ async function openFile(file, handle = null, handleItem = null) {
     hideSelBar();
     document.body.classList.remove('no-doc');
     document.title = file.name + ' — PDF 阅读器';
-    setScale(1.2);
+    // 先取出记忆的缩放状态再 setScale（setScale 会把它覆盖写回）
+    const zoomPref = (() => { try { return localStorage.getItem('pdf-zoom'); } catch (e) { return null; } })();
+    setScale(1.2); // 构建期间的基准尺寸
     welcome.classList.add('hidden');
     enableToolbar();
     await buildViewer(0);
+    applyZoomPref(zoomPref); // 页面尺寸就绪后才能算适应宽度/页面
     recordRecent(file.name, handle, file.size);
     toast(`已打开：${file.name}（${doc.numPages} 页）`);
     await maybeRestoreSession(file.name, file.size); // 有未导出的历史会话 → 自动恢复
@@ -605,6 +608,7 @@ $('#colorGroup').addEventListener('click', e => {
   if (!btn) return;
   S.color = btn.dataset.color;
   $$('.color-dot').forEach(b => b.classList.toggle('active', b === btn));
+  if (S.selectedId) recolorAnn(S.selectedId, btn.dataset.color); // 有选中标注：直接改它的颜色
 });
 $$('.color-dot')[0].classList.add('active');
 
@@ -642,6 +646,7 @@ selBar.addEventListener('click', e => {
   const b = e.target.closest('button[data-act]');
   if (!b) return;
   hideSelBar();
+  if (b.dataset.act === 'copy') { copySelectionText(); return; } // 保留选区，只收起工具条
   if (b.dataset.act === 'hl') selectionToHighlight();
   else selectionToEditText();
 });
@@ -805,7 +810,13 @@ function readdAnns(anns) {
   updateAnnUI();
 }
 
-// 页面上的指针交互（绘制 / 选中拖动）
+// 页面上的指针交互（绘制 / 选中拖动 / 平移 / 框选缩放）
+// 空格临时手型（设计软件惯例）：按住 Space 拖动平移，松开恢复
+let spacePanning = false;
+window.addEventListener('blur', () => { spacePanning = false; viewer.classList.remove('space-pan'); });
+document.addEventListener('keyup', e => {
+  if (e.key === ' ') { spacePanning = false; viewer.classList.remove('space-pan'); }
+});
 viewer.addEventListener('pointerdown', onPointerDown);
 
 function pdfPointFromEvent(e, slot) {
@@ -815,13 +826,53 @@ function pdfPointFromEvent(e, slot) {
   return v.viewport.convertToPdfPoint(e.clientX - ir.left, e.clientY - ir.top);
 }
 
+// 几何命中检测：SVG 标注默认 pointer-events:none（不挡文字选择），
+// 未选中的标注点不中 DOM 元素——按点击的 PDF 坐标找最上层包围盒命中的标注
+function hitAnnAt(e, slot) {
+  const p = pdfPointFromEvent(e, slot);
+  if (!p) return null;
+  const list = S.anns.get(S.pageOrder[slot]?.src) || [];
+  for (let i = list.length - 1; i >= 0; i--) { // 后画的在上层
+    const a = list[i];
+    const inBox = (x1, y1, x2, y2) => p[0] >= x1 && p[0] <= x2 && p[1] >= y1 && p[1] <= y2;
+    if (a.type === 'highlight') {
+      if (a.rects.some(r => inBox(r[0], r[1], r[2], r[3]))) return { dataset: { annId: a.id } };
+    } else if (a.type === 'ink') {
+      // 折线：点到任一线段的距离小于线宽/2 + 余量即命中
+      const th = (a.sw || 2.5) / 2 + 2;
+      for (let k = 1; k < a.points.length; k++) {
+        const [x1, y1] = a.points[k - 1], [x2, y2] = a.points[k];
+        const dx = x2 - x1, dy = y2 - y1, L2 = dx * dx + dy * dy;
+        const t = L2 ? Math.max(0, Math.min(1, ((p[0] - x1) * dx + (p[1] - y1) * dy) / L2)) : 0;
+        if (Math.hypot(p[0] - (x1 + t * dx), p[1] - (y1 + t * dy)) <= th) return { dataset: { annId: a.id } };
+      }
+    } else if (inBox(a.x1, a.y1, a.x2, a.y2)) { // rect / edit / text 都是包围盒
+      return { dataset: { annId: a.id } };
+    }
+  }
+  return null;
+}
+
 function onPointerDown(e) {
   if (e.button !== 0 || !S.pdfDoc) return;
+  // 手型工具 / 按住空格：拖动平移（页面之外的灰色区域也能拖）
+  if (S.tool === 'hand' || spacePanning) {
+    e.preventDefault();
+    startPan(e);
+    return;
+  }
   const pageEl = e.target.closest('.page');
   if (!pageEl) return;
   const slot = +pageEl.dataset.slot;
   const annEl = e.target.closest('[data-ann-id]');
   const editing = e.target.closest('.ann-text[contenteditable="true"]');
+
+  // Ctrl+拖拽：框选区域放大（Acrobat 式 marquee zoom）
+  if (e.ctrlKey && S.tool === 'select' && !editing) {
+    e.preventDefault();
+    startMarqueeZoom(e);
+    return;
+  }
 
   // 编辑文字模式：点击文字行原地编辑（类似福昕）
   if (S.tool === 'edittext') {
@@ -833,9 +884,11 @@ function onPointerDown(e) {
 
   if (S.tool === 'select') {
     if (editing) return;
-    if (annEl) {
-      selectAnn(annEl.dataset.annId);
-      startDragAnn(e, slot, annEl.dataset.annId);
+    // 未选中的 SVG 标注（pointer-events:none）靠几何命中点中
+    const hit = annEl || hitAnnAt(e, slot);
+    if (hit) {
+      selectAnn(hit.dataset.annId);
+      startDragAnn(e, slot, hit.dataset.annId);
     } else {
       selectAnn(null);
     }
@@ -1138,6 +1191,68 @@ function shiftFrom(ann, before, dx, dy) {
 }
 
 let drawing = null;
+
+// 手型平移：拖动即滚动（H 工具或按住空格临时使用）
+function startPan(e) {
+  const sx = e.clientX, sy = e.clientY, sl = viewer.scrollLeft, st = viewer.scrollTop;
+  viewer.classList.add('panning');
+  const onMove = ev => {
+    viewer.scrollLeft = sl - (ev.clientX - sx);
+    viewer.scrollTop = st - (ev.clientY - sy);
+  };
+  const onUp = () => {
+    viewer.classList.remove('panning');
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+  };
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+}
+
+// Ctrl+拖拽：屏幕上画虚线框，松开后把框内区域放大到铺满视口并居中
+function startMarqueeZoom(e) {
+  const box = document.createElement('div');
+  box.className = 'marquee-zoom';
+  document.body.appendChild(box);
+  const place = (x1, y1, x2, y2) => {
+    box.style.left = Math.min(x1, x2) + 'px';
+    box.style.top = Math.min(y1, y2) + 'px';
+    box.style.width = Math.abs(x2 - x1) + 'px';
+    box.style.height = Math.abs(y2 - y1) + 'px';
+  };
+  const sx = e.clientX, sy = e.clientY;
+  let ex = sx, ey = sy, moved = false;
+  const onMove = ev => {
+    ex = ev.clientX; ey = ev.clientY;
+    if (Math.abs(ex - sx) + Math.abs(ey - sy) > 4) moved = true;
+    place(sx, sy, ex, ey);
+  };
+  const onUp = () => {
+    window.removeEventListener('pointermove', onMove);
+    box.remove();
+    if (moved) marqueeZoomApply(sx, sy, ex, ey);
+  };
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp, { once: true });
+}
+function marqueeZoomApply(x1, y1, x2, y2) {
+  const vr = viewer.getBoundingClientRect();
+  // 屏幕坐标 → 内容坐标（加滚动偏移）
+  const cx1 = Math.min(x1, x2) - vr.left + viewer.scrollLeft;
+  const cx2 = Math.max(x1, x2) - vr.left + viewer.scrollLeft;
+  const cy1 = Math.min(y1, y2) - vr.top + viewer.scrollTop;
+  const cy2 = Math.max(y1, y2) - vr.top + viewer.scrollTop;
+  const w = cx2 - cx1, h = cy2 - cy1;
+  if (w < 8 || h < 8) return;
+  const old = S.scale;
+  // 框选区域（内容像素 → PDF 单位）铺满视口：受宽/高双重约束取小者，留出边距
+  const k = Math.min((viewer.clientWidth - 36) * old / w, (viewer.clientHeight - 52) * old / h);
+  setScale(old * k);
+  const r = S.scale / old; // setScale 有限幅（0.25–5），按实际生效比例滚动
+  viewer.scrollLeft = (cx1 + w / 2) * r - viewer.clientWidth / 2;
+  viewer.scrollTop = (cy1 + h / 2) * r - viewer.clientHeight / 2;
+}
+
 function startDraw(e, slot) {
   const p = pdfPointFromEvent(e, slot);
   if (!p) return;
@@ -1424,8 +1539,21 @@ $('#btnSidebar').addEventListener('click', () => $('#sidebar').classList.toggle(
 viewer.addEventListener('wheel', e => {
   if (!e.ctrlKey || !S.pdfDoc) return;
   e.preventDefault();
-  setScale(S.scale * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
+  zoomAtCursor(S.scale * (e.deltaY < 0 ? 1.15 : 1 / 1.15), e.clientX, e.clientY);
 }, { passive: false });
+
+// 光标锚点缩放：缩放前后，光标指向的内容点保持在光标下（现代查看器标配）
+function zoomAtCursor(v, cx, cy) {
+  const vr = viewer.getBoundingClientRect();
+  const ox = cx - vr.left + viewer.scrollLeft;
+  const oy = cy - vr.top + viewer.scrollTop;
+  const old = S.scale;
+  setScale(v);
+  if (S.scale === old) return;
+  const r = S.scale / old;
+  viewer.scrollLeft += ox * (r - 1);
+  viewer.scrollTop += oy * (r - 1);
+}
 // 适应宽度/页面模式下，窗口尺寸变化自动重新计算
 window.addEventListener('resize', () => {
   if (S.zoomMode === 'fitw') fitWidth();
@@ -1446,10 +1574,19 @@ function setScale(v, mode) {
   updateZoomLabel(v);
   if (Math.abs(v - S.scale) < 1e-6) return;
   S.scale = v;
+  // 记住缩放状态（数字或适应模式），下次打开文档沿用
+  if (S.pdfDoc) { try { localStorage.setItem('pdf-zoom', S.zoomMode === 'custom' ? String(v) : S.zoomMode); } catch (e) {} }
   pageEls.forEach((_, i) => setPageInnerSize(i));
   // 连续缩放（Ctrl+滚轮）合并为一次重渲染，避免打满串行渲染队列
   clearTimeout(zoomRenderTimer);
   zoomRenderTimer = setTimeout(reRenderStaleViews, 150);
+}
+
+// 打开文档时应用记忆的缩放状态（数字 / 适应宽度 / 适应页面）
+function applyZoomPref(v) {
+  if (v === 'fitw') fitWidth();
+  else if (v === 'fitp') fitPage();
+  else if (v && !isNaN(parseFloat(v))) setScale(Math.min(5, Math.max(0.25, parseFloat(v))));
 }
 
 // ---------------- 下拉菜单（缩放档位 / 页面操作） ----------------
@@ -1471,14 +1608,23 @@ function openMenu(anchor, items) {
     const b = document.createElement('button');
     if (it.danger) b.classList.add('danger');
     if (it.checked) b.classList.add('on');
-    b.innerHTML = '<span class="mcheck">✓</span>' + esc(it.label);
+    // 色点项（改色）：圆点代替勾选位；普通项占位勾（选中可见）
+    b.innerHTML = it.swatch
+      ? `<span class="mdot" style="background:${it.swatch}"></span>` + esc(it.label)
+      : '<span class="mcheck">✓</span>' + esc(it.label);
     b.addEventListener('click', () => { closeMenu(); it.onClick(); });
     m.appendChild(b);
   }
   document.body.appendChild(m);
-  const r = anchor.getBoundingClientRect();
-  m.style.top = (r.bottom + 8) + 'px';
-  m.style.left = Math.max(8, Math.min(r.right - m.offsetWidth, window.innerWidth - m.offsetWidth - 8)) + 'px';
+  // 锚点按钮：贴其下方右对齐；坐标对象（右键菜单）：出现在光标处。都夹在视口内
+  const w = m.offsetWidth, h = m.offsetHeight;
+  let top, left;
+  if (anchor instanceof Element) {
+    const r = anchor.getBoundingClientRect();
+    top = r.bottom + 8; left = r.right - w;
+  } else { top = anchor.y + 2; left = anchor.x + 2; }
+  m.style.top = Math.max(8, Math.min(top, window.innerHeight - h - 8)) + 'px';
+  m.style.left = Math.max(8, Math.min(left, window.innerWidth - w - 8)) + 'px';
   menuEl = m;
   setTimeout(() => document.addEventListener('pointerdown', onMenuOutside, true), 0);
 }
@@ -1507,6 +1653,97 @@ $('#btnMore').addEventListener('click', () => {
   ]);
 });
 $('#btnHelpClose').addEventListener('click', () => $('#shortcutHelp').close());
+
+// ---------------- 右键上下文菜单（商业阅读器标配：标注 / 选区 / 页面三套） ----------------
+const ANN_COLORS = [
+  { name: '黄色', hex: '#f6d743' }, { name: '绿色', hex: '#7bd389' },
+  { name: '红色', hex: '#e5604c' }, { name: '蓝色', hex: '#5b9bd5' },
+];
+document.addEventListener('contextmenu', e => {
+  if (!S.pdfDoc) return; // 无文档：不接管浏览器默认菜单
+  const pageEl = e.target.closest('.page');
+  let annEl = e.target.closest('[data-ann-id]');
+  if (!annEl && pageEl) { const h = hitAnnAt(e, +pageEl.dataset.slot); if (h) annEl = h; } // 几何命中未选中的标注
+  if (e.target.closest('.ann-text[contenteditable="true"]')) return; // 编辑框内保留原生菜单（复制/粘贴）
+  if (!pageEl && !annEl) return; // 工具栏 / 侧栏等页面外区域保留原生菜单
+  e.preventDefault();
+  closeMenu(); hideSelBar();
+
+  if (annEl) { // 标注：改色 / 删除
+    const id = annEl.dataset.annId;
+    const ann = annOf(id);
+    if (!ann) return;
+    selectAnn(id);
+    openMenu({ x: e.clientX, y: e.clientY }, [
+      ...ANN_COLORS.map(c => ({
+        label: c.name, swatch: c.hex, checked: ann.color === c.hex,
+        onClick: () => recolorAnn(id, c.hex),
+      })),
+      'sep',
+      { label: '删除标注（Del）', danger: true, onClick: deleteSelected },
+    ]);
+    return;
+  }
+
+  // 文字选区（右键点在选区范围内）：复制 / 高亮 / 改字；点在选区外走页面菜单
+  const sel = window.getSelection();
+  const anchorEl = sel?.anchorNode ? (sel.anchorNode.nodeType === 3 ? sel.anchorNode.parentElement : sel.anchorNode) : null;
+  if (sel && !sel.isCollapsed && anchorEl?.closest('.textLayer') && sel.rangeCount &&
+      [...sel.getRangeAt(0).getClientRects()].some(r =>
+        e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom)) {
+    openMenu({ x: e.clientX, y: e.clientY }, [
+      { label: '复制', onClick: copySelectionText },
+      'sep',
+      { label: '高亮', onClick: selectionToHighlight },
+      { label: '改字…', onClick: selectionToEditText },
+    ]);
+    return;
+  }
+
+  // 页面：旋转 / 删除 / 打印（对右键所在的页生效，不一定是滚动位置当前页）
+  const slot = +pageEl.dataset.slot;
+  openMenu({ x: e.clientX, y: e.clientY }, [
+    { label: '向左旋转本页', onClick: () => rotateSlot(slot, -90) },
+    { label: '向右旋转本页', onClick: () => rotateSlot(slot, 90) },
+    'sep',
+    { label: '删除本页…', danger: true, onClick: () => deletePageAt(slot) },
+    'sep',
+    { label: '打印…', onClick: printPdf },
+  ]);
+});
+
+// 改标注颜色（可撤销）
+function recolorAnn(id, color) {
+  const ann = annOf(id);
+  if (!ann || ann.color === color) return;
+  const before = ann.color;
+  ann.color = color;
+  renderAnnotationsBySrc(ann.page);
+  pushHistory({
+    undo() { ann.color = before; renderAnnotationsBySrc(ann.page); },
+    redo() { ann.color = color; renderAnnotationsBySrc(ann.page); },
+  });
+}
+
+// 复制文字：优先剪贴板 API，失败回退 execCommand（老 WebView 兼容）
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch (e) {}
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch (e) { return false; }
+}
+function copySelectionText() {
+  const text = String(window.getSelection() || '');
+  if (!text) return;
+  copyText(text).then(ok => toast(ok ? '已复制' : '复制失败'));
+}
 
 // 缩放后重渲染"viewport 比例已过期"的已渲染页。
 // IO 只在跨越可见性阈值时触发，持续可见的页缩放后不会自己重渲染（canvas 停在旧比例）
@@ -2366,6 +2603,13 @@ document.addEventListener('keydown', e => {
   if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return;
   if (e.key === 'F1') { e.preventDefault(); $('#shortcutHelp').showModal(); return; }
   if (e.key === 'Escape' && menuEl) { closeMenu(); return; }
+  // 空格按住 = 临时手型（默认的空格滚动让位给拖动平移）
+  if (e.key === ' ' && S.pdfDoc) {
+    e.preventDefault();
+    spacePanning = true;
+    viewer.classList.add('space-pan');
+    return;
+  }
   if (!S.pdfDoc) return;
   if (e.key === 'Delete' || e.key === 'Backspace') { if (S.selectedId) { e.preventDefault(); deleteSelected(); } }
   else if (e.key === 'Escape') {
@@ -2384,6 +2628,8 @@ document.addEventListener('keydown', e => {
   else if ((e.ctrlKey || e.metaKey) && e.key === '-') { e.preventDefault(); setScale(S.scale / 1.2); }
   else if (e.key === 'PageUp' || e.key === 'ArrowLeft') { e.preventDefault(); jumpToSlot(S.currentSlot - 1, true); }
   else if (e.key === 'PageDown' || e.key === 'ArrowRight') { e.preventDefault(); jumpToSlot(S.currentSlot + 1, true); }
+  else if (!e.ctrlKey && !e.metaKey && (e.key === 'h' || e.key === 'H')) { setTool('hand'); }
+  else if (!e.ctrlKey && !e.metaKey && (e.key === 'v' || e.key === 'V')) { setTool('select'); }
 });
 
 // 初始
@@ -2395,3 +2641,14 @@ $('#btnTheme').addEventListener('click', () => {
 });
 setScale(1.2);
 viewer.dataset.tool = 'select';
+
+// 开发/测试直开：?file=/test/sample.pdf（同源 fetch；正式入口仍是打开按钮/拖拽/最近打开）
+(() => {
+  const m = location.search.match(/[?&]file=([^&]+)/);
+  if (!m) return;
+  fetch(decodeURIComponent(m[1])).then(r => r.ok ? r.arrayBuffer() : null).then(buf => {
+    if (!buf) return;
+    const name = decodeURIComponent(m[1]).split('/').pop();
+    openFile(new File([buf], name, { type: 'application/pdf' }));
+  }).catch(() => {});
+})();

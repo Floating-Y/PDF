@@ -5,3 +5,4 @@ src-tauri/gen/
 *.bak
 test/exported*.pdf
 test/tmp-write-test.pdf
+test/shot-*.png

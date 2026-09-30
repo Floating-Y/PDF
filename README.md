@@ -25,11 +25,17 @@ overwrite), `.pdf` file association, single instance, and native dialogs.
 ## Usage
 
 - **Read** — open via the button or drag a PDF in. Continuous scrolling, zoom
-  (Ctrl+wheel / preset dropdown / fit-width / fit-page), page jumping, outline and
-  thumbnail sidebars, Ctrl+F full-text search, Ctrl+P print. F1 lists all shortcuts.
-- **Annotate** — select text to get the floating toolbar (highlight / replace), or use
-  the box / freehand / text tools. Annotations can be selected, dragged, deleted
-  (Del), and undone (Ctrl+Z / Ctrl+Y).
+  (Ctrl+wheel anchored at the cursor / preset dropdown / fit-width / fit-page /
+  Ctrl+drag to zoom into a region), a hand tool for drag-panning (H, or hold
+  Space), page jumping, outline and thumbnail sidebars, Ctrl+F full-text search,
+  Ctrl+P print. F1 lists all shortcuts; the zoom level is remembered across
+  sessions.
+- **Annotate** — select text to get the floating toolbar (copy / highlight /
+  replace), or use the box / freehand / text tools. Annotations can be selected,
+  dragged, recolored, deleted (Del), and undone (Ctrl+Z / Ctrl+Y).
+- **Right-click a page** — the context menu follows the target: selected text
+  (copy / highlight / replace), an annotation (recolor / delete), or the page
+  itself (rotate / delete / print).
 - **Edit text** — the "✏️ Edit text" tool rewrites a clicked line in place, reusing
   the PDF's own embedded font so the result is indistinguishable from the original.
 - **Pages** — rotate, delete, and reorder pages via the "⋯" menu or the thumbnail
