@@ -336,6 +336,19 @@ function setPageInnerSize(slot) {
   if (!d || !inner) return;
   inner.style.width = Math.floor(d.w * S.scale) + 'px';
   inner.style.height = Math.floor(d.h * S.scale) + 'px';
+  // 缩放过渡：旧画布位图立即拉伸到新尺寸占位，文字/标注层整体同比例拉伸（位置保持正确），
+  // 重渲染完成后由 doRenderPage 换清晰版并清掉拉伸——缩放零延迟、无白闪（pdf.js 查看器同款）
+  const v = S.views.get(slot);
+  const canvas = inner.querySelector('canvas');
+  if (canvas) {
+    canvas.style.width = inner.style.width;
+    canvas.style.height = inner.style.height;
+  }
+  const r = v ? S.scale / v.viewport.scale : 1;
+  for (const sel of ['.textLayer', '.annotationLayer']) {
+    const el = inner.querySelector(sel);
+    if (el) el.style.transform = Math.abs(r - 1) < 1e-3 ? '' : `scale(${r})`;
+  }
 }
 
 function refreshVisible() {
@@ -402,16 +415,15 @@ async function doRenderPage(slot) {
     const rotation = (page.rotate + slotObj.rot) % 360;
     const viewport = page.getViewport({ scale: S.scale, rotation });
     S.views.set(slot, { page, viewport });
-    const canvas = pageEl.querySelector('canvas');
-    canvas.width = Math.floor(viewport.width * DPR);
-    canvas.height = Math.floor(viewport.height * DPR);
-    canvas.style.width = Math.floor(viewport.width) + 'px';
-    canvas.style.height = Math.floor(viewport.height) + 'px';
+    // 渲染进离屏画布：画完才一次性上屏——期间旧位图（已拉伸占位）保持显示，无白闪
+    const off = document.createElement('canvas');
+    off.width = Math.floor(viewport.width * DPR);
+    off.height = Math.floor(viewport.height * DPR);
     const inner = pageEl.querySelector('.page-inner');
     inner.style.setProperty('--scale-factor', viewport.scale);
     // 渲染带超时自愈：卡死 → 取消 → 重试（最多 3 次）
     let task = page.render({
-      canvasContext: canvas.getContext('2d'),
+      canvasContext: off.getContext('2d'),
       viewport,
       transform: DPR !== 1 ? [DPR, 0, 0, DPR, 0, 0] : undefined,
     });
@@ -436,7 +448,7 @@ async function doRenderPage(slot) {
         if (S.gen !== gen) return;
         if (attempt < 2) {
           task = page.render({
-            canvasContext: canvas.getContext('2d'),
+            canvasContext: off.getContext('2d'),
             viewport,
             transform: DPR !== 1 ? [DPR, 0, 0, DPR, 0, 0] : undefined,
           });
@@ -459,6 +471,15 @@ async function doRenderPage(slot) {
       }
     }
     if (S.gen !== gen) return;
+    // 清晰位图就绪：一次性换上，并清掉缩放期间的占位拉伸
+    const canvas = pageEl.querySelector('canvas');
+    canvas.width = off.width;
+    canvas.height = off.height;
+    canvas.getContext('2d').drawImage(off, 0, 0);
+    for (const sel of ['.textLayer', '.annotationLayer']) {
+      const el = inner.querySelector(sel);
+      if (el) el.style.transform = '';
+    }
     // 文本层（选择/复制），同样带超时保护
     const tc = await getTextContent(slotObj.src);
     if (S.gen !== gen) return;
@@ -1949,6 +1970,10 @@ let searchCase = false, searchHLAll = true;
 let searchDebounce = null;
 
 function showSearchPanel(show) { $('#searchPanel').hidden = !show; }
+// 点击搜索区外即收起浮层（面板在 .search-wrap 内，点面板按钮不受影响；捕获阶段立即收起）
+document.addEventListener('pointerdown', e => {
+  if (!e.target.closest('.search-wrap')) showSearchPanel(false);
+}, true);
 function updateSearchCount() {
   $('#searchCount').textContent = (searchState.cur + 1) + '/' + searchState.results.length;
 }
