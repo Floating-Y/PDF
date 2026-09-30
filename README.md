@@ -31,8 +31,9 @@ overwrite), `.pdf` file association, single instance, and native dialogs.
   Ctrl+P print. F1 lists all shortcuts; the zoom level is remembered across
   sessions.
 - **Annotate** — select text to get the floating toolbar (copy / highlight /
-  replace), or use the box / freehand / text tools. Annotations can be selected,
-  dragged, recolored, deleted (Del), and undone (Ctrl+Z / Ctrl+Y).
+  underline / strikethrough / replace), or use the box / freehand / text tools.
+  Annotations can be selected, dragged, recolored, deleted (Del), and undone
+  (Ctrl+Z / Ctrl+Y).
 - **Right-click a page** — the context menu follows the target: selected text
   (copy / highlight / replace), an annotation (recolor / delete), or the page
   itself (rotate / delete / print).

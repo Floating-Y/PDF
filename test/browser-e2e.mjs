@@ -232,9 +232,20 @@ try {
     await cdp.mouse('mouseReleased', selPt.x, selPt.y, 'right');
     await sleep(250);
     items = await cdp.eval('menuEl ? [...menuEl.querySelectorAll("button")].map(b => b.textContent) : null');
-    check('选区右键菜单', !!items && items.some(t => t.includes('复制')) && items.some(t => t.includes('高亮')), JSON.stringify(items));
+    check('选区右键菜单', !!items && items.some(t => t.includes('复制')) && items.some(t => t.includes('高亮')) && items.some(t => t.includes('下划线')), JSON.stringify(items));
   }
   check('选区工具条含复制按钮', await cdp.eval('!!document.querySelector("#selBar button[data-act=copy]")'));
+
+  // 下划线（选区工具条）+ 含线形标注的导出冒烟（页内 pdf-lib 回读）
+  await cdp.eval(`(() => { const sp = document.querySelector('.textLayer span'); const r = document.createRange(); r.selectNodeContents(sp);
+    const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); return !!sp; })()`);
+  await sleep(400); // selectionchange 防抖 180ms 后工具条出现
+  await cdp.eval('document.querySelector("#selBar button[data-act=ul]").click()');
+  await sleep(200);
+  const ulTypes = await cdp.eval('[...S.anns.values()].flat().map(a => a.type)');
+  check('选区加下划线', ulTypes.includes('underline'), JSON.stringify(ulTypes));
+  const exp = await cdp.eval('(async () => { const b = await buildExportBytes(); const d = await PDFLib.PDFDocument.load(b); return d.getPageCount(); })()');
+  check('含下划线的导出冒烟', exp === 20, String(exp));
 
   // 截图（人工目视审查用：shot-*.png，已 gitignore）
   const shot = async name => {

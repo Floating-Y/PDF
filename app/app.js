@@ -540,6 +540,14 @@ function renderAnnotations(slot) {
     if (a.type === 'highlight') {
       const rs = a.rects.map(r => `<rect ${vrect(r[0], r[1], r[2], r[3])} fill="${a.color}" opacity="0.4"/>`).join('');
       shapes += `<g data-ann-id="${a.id}" class="ann-shape${sel}">${rs}</g>`;
+    } else if (a.type === 'underline' || a.type === 'strike') {
+      // 沿选区基线画线：两个端点各自过旋转变换（90°/270° 时线随页面转向）
+      const ls = a.rects.map(r => {
+        const { y, th } = markLine(a.type, r);
+        const p1 = tl([r[0], y]), p2 = tl([r[2], y]);
+        return `<line x1="${p1[0]}" y1="${p1[1]}" x2="${p2[0]}" y2="${p2[1]}" stroke="${a.color}" stroke-width="${th * sc}"/>`;
+      }).join('');
+      shapes += `<g data-ann-id="${a.id}" class="ann-shape${sel}">${ls}</g>`;
     } else if (a.type === 'edit') {
       // 涂白原文
       const rs = a.rects.map(r => `<rect ${vrect(r[0], r[1], r[2], r[3])} fill="#ffffff"/>`).join('');
@@ -648,6 +656,8 @@ selBar.addEventListener('click', e => {
   hideSelBar();
   if (b.dataset.act === 'copy') { copySelectionText(); return; } // 保留选区，只收起工具条
   if (b.dataset.act === 'hl') selectionToHighlight();
+  else if (b.dataset.act === 'ul') selectionToTextMark('underline');
+  else if (b.dataset.act === 'st') selectionToTextMark('strike');
   else selectionToEditText();
 });
 viewer.addEventListener('scroll', hideSelBar);
@@ -696,13 +706,16 @@ document.addEventListener('mouseup', e => {
   selectionToHighlight();
 });
 
-function selectionToHighlight() {
+function selectionToHighlight() { selectionToTextMark('highlight'); }
+
+// 高亮 / 下划线 / 删除线：把当前文本选区按页分组转成标注（同一套"选区 → pdf 矩形"管线）
+function selectionToTextMark(type) {
   const { sel, bySlot } = selectionRectsBySlot();
-  if (!bySlot.size) { toast('请先用鼠标选中要高亮的文字'); return; }
+  if (!bySlot.size) { toast('请先用鼠标选中要标记的文字'); return; }
   const added = [];
   for (const [slot, g] of bySlot) {
     const src = S.pageOrder[slot].src;
-    const a = { id: 'a' + annSeq++, type: 'highlight', page: src, rects: g.rects, color: S.color };
+    const a = { id: 'a' + annSeq++, type, page: src, rects: g.rects, color: S.color };
     if (!S.anns.has(src)) S.anns.set(src, []);
     S.anns.get(src).push(a);
     added.push(a);
@@ -711,6 +724,12 @@ function selectionToHighlight() {
   pushHistoryAdd(added);
   sel.removeAllRanges();
 }
+
+// 下划线 / 删除线的画线位置与线宽（预览与导出共用同一公式，所见即所得）
+const markLine = (type, r) => ({
+  y: type === 'underline' ? r[1] + (r[3] - r[1]) * 0.18 : (r[1] + r[3]) / 2,
+  th: Math.max(1, (r[3] - r[1]) * 0.08),
+});
 
 // 改字：涂白选中原文并原位替换
 const btnEditText = $('#btnEditText');
@@ -835,7 +854,7 @@ function hitAnnAt(e, slot) {
   for (let i = list.length - 1; i >= 0; i--) { // 后画的在上层
     const a = list[i];
     const inBox = (x1, y1, x2, y2) => p[0] >= x1 && p[0] <= x2 && p[1] >= y1 && p[1] <= y2;
-    if (a.type === 'highlight') {
+    if (a.type === 'highlight' || a.type === 'underline' || a.type === 'strike') {
       if (a.rects.some(r => inBox(r[0], r[1], r[2], r[3]))) return { dataset: { annId: a.id } };
     } else if (a.type === 'ink') {
       // 折线：点到任一线段的距离小于线宽/2 + 余量即命中
@@ -1695,6 +1714,8 @@ document.addEventListener('contextmenu', e => {
       { label: '复制', onClick: copySelectionText },
       'sep',
       { label: '高亮', onClick: selectionToHighlight },
+      { label: '下划线', onClick: () => selectionToTextMark('underline') },
+      { label: '删除线', onClick: () => selectionToTextMark('strike') },
       { label: '改字…', onClick: selectionToEditText },
     ]);
     return;
@@ -2300,6 +2321,11 @@ function drawAnn(page, a, fontObjs, helv, embeddedFonts, embeddedFk) {
   if (a.type === 'highlight') {
     for (const r of a.rects) {
       page.drawRectangle({ x: r[0], y: r[1], width: r[2] - r[0], height: r[3] - r[1], color, opacity: 0.4 });
+    }
+  } else if (a.type === 'underline' || a.type === 'strike') {
+    for (const r of a.rects) {
+      const { y, th } = markLine(a.type, r);
+      page.drawLine({ start: { x: r[0], y }, end: { x: r[2], y }, thickness: th, color });
     }
   } else if (a.type === 'rect') {
     page.drawRectangle({ x: a.x1, y: a.y1, width: a.x2 - a.x1, height: a.y2 - a.y1, borderColor: color, borderWidth: a.sw || 2 });
