@@ -39,11 +39,19 @@ overwrite), `.pdf` file association, single instance, and native dialogs.
   and editing sessions autosave to IndexedDB — after a crash, the start page offers
   to resume where you left off.
 
-## Layout
+## Structure
 
-`app/` frontend (single-file logic) · `vendor/` pdf.js, pdf-lib, fontkit, open-source
-fonts · `src-tauri/` desktop shell · `tools/` build and fixture generators · `test/`
-regression scripts and fixtures. `node test/all.js` runs the regression suite.
+```
+app/        frontend shared by both editions — index.html, app.js (all logic), style.css
+vendor/     pdf.js, pdf-lib, fontkit + open-source fonts (versions pinned, offline)
+src-tauri/  desktop shell (Tauri 2) — custom commands, single instance, file association
+tools/      build and fixture generators (build-web, gen-icon, gen-test-pdf*)
+test/       regression scripts and fixtures
+server.js   zero-dependency static server (browser edition)
+start.bat   one-click launcher for the browser edition
+```
+
+`node test/all.js` runs the regression suite.
 
 ## License
 
