@@ -196,6 +196,11 @@ const wc = await cdp.eval(`({ visible: !document.getElementById('winControls').h
   n: document.querySelectorAll('#winControls button').length,
   drag: document.getElementById('toolbar').hasAttribute('data-tauri-drag-region') })`);
 check('窗口控制按钮可见', wc.visible && wc.n === 3 && wc.drag, JSON.stringify(wc));
+// 8a. 窗口拖动：拖拽区 mousedown 底层调用 start_dragging，缺授权时静默失败
+//（双击最大化走 toggle-maximize 是另一条命令，曾出现"能双击最大化却拖不动"）。
+// OS 级拖动循环跟踪物理光标，CDP 合成事件驱动不了，只能验证命令可调用。
+const dragOk = await cdp.eval(`window.__TAURI_INTERNALS__.invoke('plugin:window|start_dragging').then(() => true).catch(e => false)`);
+check('窗口拖动权限（start_dragging 可调用）', dragOk === true);
 const mx = await cdp.eval(`(async () => {
   const w = window.__TAURI__.window.getCurrentWindow();
   await w.toggleMaximize(); await new Promise(r => setTimeout(r, 500));
