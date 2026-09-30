@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark light">
+<title>PDF 阅读器</title>
+<link rel="stylesheet" href="/vendor/pdf_viewer.css">
+<link rel="stylesheet" href="/app/style.css">
+</head>
+<body class="no-doc">
+  <header id="toolbar" data-tauri-drag-region>
+    <div class="tb-group">
+      <button id="btnOpen" title="打开 PDF" class="btn-labeled">
+        <svg viewBox="0 0 16 16"><path d="M2.5 5A1.5 1.5 0 0 1 4 3.5h2.5L8 5h4A1.5 1.5 0 0 1 13.5 6.5v4A1.5 1.5 0 0 1 12 12H4a1.5 1.5 0 0 1-1.5-1.5z"/></svg>
+        <span>打开</span>
+      </button>
+      <button id="btnSave" title="导出为新的 PDF 文件" disabled class="btn-labeled">
+        <svg viewBox="0 0 16 16"><path d="M8 2.5V10m0 0L5 7m3 3l3-3"/><path d="M3 12.5h10"/></svg>
+        <span>导出</span>
+      </button>
+      <button id="btnUndo" title="撤销（Ctrl+Z）" disabled>
+        <svg viewBox="0 0 16 16"><path d="M2.5 3v3.5H6"/><path d="M2.9 6.5a5.4 5.4 0 1 1-1 4"/></svg>
+      </button>
+      <button id="btnRedo" title="重做（Ctrl+Y）" disabled>
+        <svg viewBox="0 0 16 16"><g transform="scale(-1,1) translate(-16,0)"><path d="M2.5 3v3.5H6"/><path d="M2.9 6.5a5.4 5.4 0 1 1-1 4"/></g></svg>
+      </button>
+    </div>
+    <div class="tb-sep"></div>
+
+    <div class="tb-group">
+      <div class="seg">
+        <button id="btnPrev" title="上一页" disabled>
+          <svg viewBox="0 0 16 16"><path d="M9.5 3.5 5 8l4.5 4.5"/></svg>
+        </button>
+        <div class="page-field">
+          <input id="pageInput" type="number" min="1" value="1" disabled>
+          <span id="pageTotal" class="muted">/ –</span>
+        </div>
+        <button id="btnNext" title="下一页" disabled>
+          <svg viewBox="0 0 16 16"><path d="M6.5 3.5 11 8l-4.5 4.5"/></svg>
+        </button>
+      </div>
+
+      <div class="seg">
+        <button id="btnZoomOut" title="缩小（Ctrl+-）" disabled>
+          <svg viewBox="0 0 16 16"><path d="M3.5 8h9"/></svg>
+        </button>
+        <button id="btnZoomMenu" title="缩放（Ctrl+= 放大 / Ctrl+- 缩小 / Ctrl+滚轮）" disabled>
+          <span id="zoomLabel" class="zoom-val">–</span>
+          <svg class="caret" viewBox="0 0 16 16"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg>
+        </button>
+        <button id="btnZoomIn" title="放大（Ctrl+=）" disabled>
+          <svg viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="tb-sep"></div>
+
+    <div class="tb-group">
+      <div class="seg" id="toolGroup">
+        <button data-tool="select" class="active" title="选择/移动标注" disabled>
+          <svg viewBox="0 0 16 16"><path d="M8 2.5v11M2.5 8h11M8 2.5 6.5 4M8 2.5 9.5 4M8 13.5 6.5 12M8 13.5 9.5 12M2.5 8 4 6.5M2.5 8 4 9.5M13.5 8 12 6.5M13.5 8 12 9.5"/></svg>
+        </button>
+        <button data-tool="edittext" title="编辑文字模式：直接点击页面上的文字行，原地修改" disabled>
+          <svg viewBox="0 0 16 16"><path d="M10.2 3.2l2.6 2.6L7 11.6l-3.4.8.8-3.4z"/><path d="M2.5 14h11"/></svg>
+        </button>
+        <button data-tool="highlight" title="高亮：选中文字后松开即自动高亮，或选中后点此按钮" disabled>
+          <svg viewBox="0 0 16 16"><path d="M9 9.5l4-4a1.06 1.06 0 0 0-1.5-1.5l-4 4z"/><path d="M7 9.5 4.5 12l-.5 2 2-.5L8.5 11"/><path d="M2.5 14.5h4" opacity=".55"/></svg>
+        </button>
+        <button id="btnEditText" title="改字：选中原文后点此，涂白原文字并输入替换文字（清空=删除原文）" disabled>
+          <svg viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="1.5" stroke-dasharray="2.4 2"/><path d="M8.2 10.8l3.6-3.6 1 1-3.6 3.6-1.4.4z"/></svg>
+        </button>
+        <button data-tool="text" title="添加文字标注" disabled>
+          <svg viewBox="0 0 16 16"><path d="M3.5 3.5h9M8 3.5v9.5"/></svg>
+        </button>
+        <button data-tool="rect" title="画方框" disabled>
+          <svg viewBox="0 0 16 16"><rect x="3" y="4" width="10" height="8" rx="1"/></svg>
+        </button>
+        <button data-tool="ink" title="自由绘制" disabled>
+          <svg viewBox="0 0 16 16"><path d="M2.5 12.5c1.5-4.5 3.2-6 4.3-5 .8.8-.5 3.4 1 4.3 1.5 1 3.8-1.3 5.7-6.3"/></svg>
+        </button>
+        <div class="seg-div"></div>
+        <button id="btnDeleteAnn" title="删除选中的标注（Del）" disabled>
+          <svg viewBox="0 0 16 16"><path d="M3 4.5h10M6.3 4.5v-1a.8.8 0 0 1 .8-.8h1.8a.8.8 0 0 1 .8.8v1M4.5 4.5l.6 8.2a1 1 0 0 0 1 .9h3.8a1 1 0 0 0 1-.9l.6-8.2M6.7 7.3v3.6M9.3 7.3v3.6"/></svg>
+        </button>
+      </div>
+
+      <div class="tb-group" id="colorGroup">
+        <button class="color-dot" data-color="#f6d743" style="background:#f6d743" title="黄色"></button>
+        <button class="color-dot" data-color="#7bd389" style="background:#7bd389" title="绿色"></button>
+        <button class="color-dot" data-color="#e5604c" style="background:#e5604c" title="红色"></button>
+        <button class="color-dot" data-color="#5b9bd5" style="background:#5b9bd5" title="蓝色"></button>
+      </div>
+
+      <button id="btnMore" title="页面操作与更多" disabled>
+        <svg viewBox="0 0 16 16"><g fill="currentColor" stroke="none"><circle cx="3.5" cy="8" r="1.3"/><circle cx="8" cy="8" r="1.3"/><circle cx="12.5" cy="8" r="1.3"/></g></svg>
+      </button>
+      <button id="btnSidebar" title="显示 / 隐藏侧栏">
+        <svg viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M6 2.5v11"/></svg>
+      </button>
+    </div>
+
+    <div class="tb-group grow">
+      <div class="search-wrap" data-tauri-drag-region>
+        <svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.3"/><path d="m10.3 10.3 3.2 3.2"/></svg>
+        <input id="searchBox" type="search" placeholder="搜索全文…" title="搜索全文（Ctrl+F）" disabled>
+        <div id="searchPanel" hidden>
+          <button data-snav="-1" title="上一处（Shift+Enter）">
+            <svg viewBox="0 0 16 16"><path d="M9.5 3.5 5 8l4.5 4.5"/></svg>
+          </button>
+          <span id="searchCount">0/0</span>
+          <button data-snav="1" title="下一处（Enter）">
+            <svg viewBox="0 0 16 16"><path d="M6.5 3.5 11 8l-4.5 4.5"/></svg>
+          </button>
+          <label class="stoggle"><input type="checkbox" id="searchCase">区分大小写</label>
+          <label class="stoggle"><input type="checkbox" id="searchHl" checked>全部高亮</label>
+        </div>
+      </div>
+    </div>
+    <div class="tb-sep"></div>
+    <div class="tb-group">
+      <button id="btnTheme" title="切换深色 / 浅色主题">
+        <svg class="ic-sun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3.2"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.5 3.5l1.1 1.1M11.4 11.4l1.1 1.1M12.5 3.5l-1.1 1.1M4.6 11.4l-1.1 1.1"/></svg>
+        <svg class="ic-moon" viewBox="0 0 16 16"><path d="M13.2 9.7A5.8 5.8 0 1 1 6.3 2.8a4.6 4.6 0 0 0 6.9 6.9z"/></svg>
+      </button>
+    </div>
+
+    <!-- 桌面版窗口控制（浏览器版保持 hidden）：工具栏兼任标题栏 -->
+    <div id="winControls" hidden>
+      <button id="winMin" title="最小化">
+        <svg viewBox="0 0 16 16"><path d="M3 8h10"/></svg>
+      </button>
+      <button id="winMax" title="最大化 / 还原">
+        <svg class="ic-max" viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9" rx="1"/></svg>
+        <svg class="ic-restore" viewBox="0 0 16 16"><path d="M5.5 5h6a.5.5 0 0 1 .5.5v6"/><rect x="3.5" y="3.5" width="7" height="7" rx="1"/></svg>
+      </button>
+      <button id="winClose" title="关闭">
+        <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div id="main">
+    <aside id="sidebar">
+      <div class="side-tabs">
+        <button data-tab="thumbs" class="active">页面</button>
+        <button data-tab="outline">目录</button>
+        <button data-tab="results">搜索</button>
+      </div>
+      <div id="tab-thumbs" class="side-panel active"></div>
+      <div id="tab-outline" class="side-panel"><div class="muted pad">无目录</div></div>
+      <div id="tab-results" class="side-panel"><div class="muted pad">输入关键词后回车搜索</div></div>
+    </aside>
+    <div id="viewerWrap">
+      <div id="viewer" tabindex="0"></div>
+      <div id="welcome">
+        <svg class="logo" viewBox="0 0 20 20"><path d="M5 2.5h6L14.5 6v11a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 17V4A1.5 1.5 0 0 1 5 2.5z"/><path d="M11 2.5V6h3.5M6.5 10h7M6.5 13h7"/></svg>
+        <h1>PDF 阅读器</h1>
+        <p>阅读 · 标注 · 编辑文字 · 页面管理，文件不出本机</p>
+        <button id="btnOpen2">选择 PDF 文件</button>
+        <div class="drop-hint">或直接把 PDF 文件拖进窗口</div>
+        <div id="recentBox" class="recent" hidden>
+          <div class="recent-title">最近打开</div>
+          <div id="recentList"></div>
+        </div>
+        <div id="recoverBox" class="recent" hidden>
+          <div class="recent-title">未导出的修改</div>
+          <div id="recoverMsg"></div>
+          <div class="recover-actions">
+            <button id="btnRecover">继续编辑</button>
+            <button id="btnRecoverDiscard">放弃</button>
+          </div>
+        </div>
+      </div>
+      <div id="selBar" hidden>
+        <button data-act="hl" title="高亮选中的文字">
+          <svg viewBox="0 0 16 16"><path d="M9 9.5l4-4a1.06 1.06 0 0 0-1.5-1.5l-4 4z"/><path d="M7 9.5 4.5 12l-.5 2 2-.5L8.5 11"/></svg>高亮
+        </button>
+        <button data-act="edit" title="把选中的原文替换为新文字">
+          <svg viewBox="0 0 16 16"><path d="M8.2 10.8l3.6-3.6 1 1-3.6 3.6-1.4.4z"/><path d="M2.5 12.5h11" opacity=".5"/></svg>改字
+        </button>
+      </div>
+      <div id="toast"></div>
+    </div>
+  </div>
+
+  <dialog id="shortcutHelp">
+    <h2>快捷键</h2>
+    <div class="sk-grid">
+      <span>搜索</span><kbd>Ctrl+F</kbd>
+      <span>下一处 / 上一处</span><kbd>Enter / Shift+Enter</kbd>
+      <span>上一页 / 下一页</span><kbd>← → PgUp PgDn</kbd>
+      <span>首页 / 末页</span><kbd>Home / End</kbd>
+      <span>放大 / 缩小</span><kbd>Ctrl+= / Ctrl+-</kbd>
+      <span>缩放（连续）</span><kbd>Ctrl+滚轮</kbd>
+      <span>撤销 / 重做</span><kbd>Ctrl+Z / Ctrl+Y</kbd>
+      <span>保存（桌面版写回原文件）</span><kbd>Ctrl+S</kbd>
+      <span>打印</span><kbd>Ctrl+P</kbd>
+      <span>删除选中标注</span><kbd>Del</kbd>
+      <span>取消选择、回到选择工具</span><kbd>Esc</kbd>
+      <span>本帮助</span><kbd>F1</kbd>
+    </div>
+    <button id="btnHelpClose">关闭</button>
+  </dialog>
+
+  <input type="file" id="fileInput" accept="application/pdf,.pdf" hidden>
+  <a id="downloadLink" hidden></a>
+
+  <script src="/vendor/pdf.min.js"></script>
+  <script src="/vendor/pdf-lib.min.js"></script>
+  <script src="/vendor/fontkit.min.js"></script>
+  <script src="/app/app.js"></script>
+</body>
+</html>
