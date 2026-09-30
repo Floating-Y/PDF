@@ -1,6 +1,6 @@
 [package]
 name = "pdfpro"
-version = "1.0.0"
+version = "0.0.1"
 edition = "2021"
 description = "PDF 阅读器：阅读 · 标注 · 编辑文字 · 页面管理"
 
