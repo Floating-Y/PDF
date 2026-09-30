@@ -135,6 +135,8 @@ test/sample.pdf         test document (regenerate with node tools/gen-test-pdf.j
 test/all.js             one-command regression (runs verify-export-layout / repro-embed / verify-wrap)
 ```
 
+Development conventions (positioning and discipline) are documented in [AGENTS.md](AGENTS.md).
+
 ## Verified
 
 Opening/rendering/zoom/paging, annotation add/delete/move with undo/redo (the full chain: add/delete/
