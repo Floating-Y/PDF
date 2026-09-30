@@ -2,14 +2,15 @@
 // 用法：
 //   1) WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 启动 pdfpro.exe
 //   2) node test/desktop-e2e.mjs
-import { cpSync } from 'fs';
+import { cpSync, existsSync } from 'fs';
+import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { join, dirname, resolve } from 'path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // openPath 在 WebView 里需要磁盘绝对路径；统一正斜杠，便于与 S.srcPath 回读值比较
 const ROOT = resolve(__dirname, '..').replace(/\\/g, '/');
 cpSync(join(__dirname, 'sample.pdf'), join(__dirname, 'tmp-write-test.pdf')); // 写回测试副本
-const BASE = 'http://127.0.0.1:9222';
+const BASE = process.env.CDP_BASE || 'http://127.0.0.1:9222';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function findPageWs(retries = 20) {
@@ -188,8 +189,28 @@ const dirtyState = await cdp.eval(`(async () => {
 })()`);
 check('全部撤销后 dirty 清除', dirtyState.before && !dirtyState.after, JSON.stringify(dirtyState));
 
-// 7. 单实例 + 文件关联：第二个进程带路径启动 → 已运行实例接收事件
-// （由外部脚本触发，此处仅占位输出结果汇总）
+// 7. 单实例 + 文件转发：第二个进程带路径启动 → 已运行实例打开该文件、第二进程退出
+//（双击 .pdf 文件关联 = 同一条 argv 转发路径，注册表只在安装包里）
+const exePath = [
+  join(__dirname, '..', 'src-tauri', 'target', 'debug', 'pdfpro.exe'),
+  join(__dirname, '..', 'src-tauri', 'target', 'release', 'pdfpro.exe'),
+].find(p => existsSync(p));
+if (!exePath) { check('找到 pdfpro.exe', false); }
+else {
+  const beforeDoc = await cdp.eval('S.docName');
+  const second = spawn(exePath, [`${ROOT}/test/sample.pdf`], { stdio: 'ignore', detached: true });
+  let forwarded = false;
+  for (let i = 0; i < 20 && !forwarded; i++) {
+    await sleep(500);
+    try { forwarded = await cdp.eval('S.docName === "sample.pdf" && S.srcPath !== null'); } catch (e) {}
+  }
+  check('单实例转发：文件转给已运行实例', forwarded && beforeDoc !== 'sample.pdf',
+    `${beforeDoc} → ${await cdp.eval('S.docName')}`);
+  await sleep(1500);
+  let secondAlive = true;
+  try { process.kill(second.pid, 0); } catch (e) { secondAlive = false; }
+  check('第二进程自动退出', !secondAlive, `pid ${second.pid}`);
+}
 
 // 8. 自绘窗口控制：按钮可见、最大化切换与图标联动、双击标题栏最大化
 const wc = await cdp.eval(`({ visible: !document.getElementById('winControls').hidden,
