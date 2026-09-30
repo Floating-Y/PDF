@@ -23,6 +23,12 @@ const BROWSER = CANDIDATES.find(existsSync);
 if (!BROWSER) { console.error('未找到 Chrome/Edge（可设 CHROME 环境变量指定路径）'); process.exit(1); }
 
 const server = spawn(process.execPath, [join(__dirname, '..', 'server.js'), String(PORT)], { stdio: 'ignore' });
+await sleep(400);
+// 端口被占（上次强杀残留）时 server 会立刻退出——显式报错，不让后续步骤莫名失败
+if (server.exitCode !== null) {
+  console.error(`server.js 启动失败（端口 ${PORT} 被占用，先杀掉残留进程：netstat -ano | findstr :${PORT}）`);
+  process.exit(1);
+}
 const profile = join(tmpdir(), 'pdfpro-e2e-' + Date.now());
 const browser = spawn(BROWSER, [
   '--headless=new', '--remote-debugging-port=' + CDP_PORT, '--user-data-dir=' + profile,
@@ -246,6 +252,35 @@ try {
   check('选区加下划线', ulTypes.includes('underline'), JSON.stringify(ulTypes));
   const exp = await cdp.eval('(async () => { const b = await buildExportBytes(); const d = await PDFLib.PDFDocument.load(b); return d.getPageCount(); })()');
   check('含下划线的导出冒烟', exp === 20, String(exp));
+
+  // 全文搜索：输入即搜 + 命中计数 + 自动定位第一处
+  await cdp.eval(`(() => { const sb = document.getElementById('searchBox'); sb.value = 'fox';
+    sb.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+  await sleep(1800); // 防抖 280ms + 全文扫描
+  const sr = await cdp.eval('({ n: searchState.results.length, cur: searchState.cur })');
+  check('全文搜索出结果并定位', sr.n > 0 && sr.cur === 0, JSON.stringify(sr));
+
+  // 主题切换
+  const th0 = await cdp.eval('document.documentElement.dataset.theme');
+  await cdp.eval('document.getElementById("btnTheme").click()');
+  const th1 = await cdp.eval('document.documentElement.dataset.theme');
+  check('主题切换', th0 !== th1 && ['dark', 'light'].includes(th1), `${th0} → ${th1}`);
+
+  // 崩溃恢复（浏览器版路径）：会话落库 → 打开无 ?file= 的欢迎屏 → 横幅 → 继续编辑
+  await sleep(1300); // 等会话防抖 800ms 落库（含上面的标注）
+  await cdp.eval('clearDirty()'); // 有未导出修改时应用的 beforeunload 确认会挡住导航（无头下无人应答即挂起）；会话已落库，清掉标记安全
+  await cdp.send('Page.navigate', { url: `http://127.0.0.1:${PORT}/` });
+  await sleep(2200);
+  const banner = await cdp.eval(`({ visible: !document.getElementById('recoverBox').hidden,
+    msg: document.getElementById('recoverMsg').textContent })`);
+  check('欢迎屏恢复横幅（浏览器版）', banner.visible && /sample\.pdf/.test(banner.msg), banner.msg);
+  await cdp.eval('document.getElementById("btnRecover").click()');
+  let rec = null;
+  for (let i = 0; i < 12 && !rec; i++) {
+    await sleep(500);
+    try { rec = await cdp.eval('S.docName === "sample.pdf" ? [...S.anns.values()].flat().map(a => a.type) : null'); } catch (e) {}
+  }
+  check('继续编辑恢复标注（浏览器版）', !!rec && rec.includes('rect') && rec.includes('underline'), JSON.stringify(rec));
 
   // 截图（人工目视审查用：shot-*.png，已 gitignore）
   const shot = async name => {

@@ -1943,7 +1943,7 @@ async function destToSrc(dest) {
 
 // ---------------- 搜索 ----------------
 let searching = false;
-let searchQueued = null; // 搜索进行中到达的输入：排队待补搜
+let searchQueued = null; // 搜索进行中到达的输入：{q, step} 排队待补搜（含回车跳转意图）
 let searchState = { q: '', results: [], cur: -1 };
 let searchCase = false, searchHLAll = true;
 let searchDebounce = null;
@@ -1994,8 +1994,9 @@ async function doSearch(q, step) {
     gotoSearchResult((searchState.cur + step + searchState.results.length) % searchState.results.length);
     return;
   }
-  // 上一次搜索还在跑：最新查询排队，跑完自动补搜（直接丢弃会让结果停在中间态）
-  if (searching) { if (!step) searchQueued = q; return; }
+  // 上一次搜索还在跑：最新查询连同回车跳转意图一起排队，跑完自动补搜/跳转
+  //（直接丢弃会让结果停在中间态；只排查询不排跳转会吞掉用户的 Enter）
+  if (searching) { searchQueued = { q, step: step || 0 }; return; }
   searching = true;
   showSearchPanel(true);
   try {
@@ -2028,7 +2029,7 @@ async function doSearch(q, step) {
   } finally {
     searching = false; // 搜索中途换文件等异常也必须释放标志，否则搜索框被永久锁死
     const next = searchQueued; searchQueued = null;
-    if (next && next !== searchState.q) doSearch(next);
+    if (next) doSearch(next.q, next.step || undefined); // 同词+step → 跳下一处；新词 → 重新搜索
   }
 }
 
