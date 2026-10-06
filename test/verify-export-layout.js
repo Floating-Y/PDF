@@ -4,14 +4,8 @@ const PDFLib = require('../vendor/pdf-lib.min.js');
 const fontkit = require('../vendor/fontkit.min.js');
 const fs = require('fs');
 
-// 直接从 app.js 提取真函数（joinRuns/alignRunsByDiff），避免复本与实现漂移
-const appSrc = fs.readFileSync('app/app.js', 'utf8');
-function extractFn(name) {
-  const m = appSrc.match(new RegExp('^function ' + name + '\\([^)]*\\) \\{[\\s\\S]*?^\\}', 'm'));
-  if (!m) throw new Error('function not found in app.js: ' + name);
-  return m[0];
-}
-const alignRunsByDiff = eval('(' + extractFn('alignRunsByDiff') + ')');
+// 直接 require textedit.js 的真函数（alignRunsByDiff），避免复本与实现漂移
+const { alignRunsByDiff } = require('../app/textedit.js');
 
 const serif = fontkit.create(fs.readFileSync('vendor/fonts/LiberationSerif-Regular.ttf'));
 function widthOf(text, size) {
@@ -43,7 +37,7 @@ const runs = [
 // origText = joinRuns（空格 run 本身提供空格字符，gapBefore 全 false）
 const origText = runs.map(r => r.str).join('');
 
-// alignRunsByDiff 直接取自 app.js（见文件头部 extractFn），不再维护复本
+// alignRunsByDiff 来自 textedit.js（见文件头部 require），不再维护复本
 
 function checkEdit(name, newText) {
   const ann = { origText, runs: runs.map(r => ({ ...r, cur: r.str })) };

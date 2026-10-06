@@ -1,14 +1,6 @@
-// 折行逻辑单测：直接从 app.js 提取真函数 wrapLine（与实现零漂移），用等宽 fit 模拟测量
-const fs = require('fs');
+// 折行逻辑单测：直接 require textedit.js 的真函数 wrapLine（与实现零漂移），用等宽 fit 模拟测量
 const assert = require('assert');
-
-const appSrc = fs.readFileSync('app/app.js', 'utf8');
-function extractFn(name) {
-  const m = appSrc.match(new RegExp('^function ' + name + '\\([^)]*\\) \\{[\\s\\S]*?^\\}', 'm'));
-  if (!m) throw new Error('function not found in app.js: ' + name);
-  return m[0];
-}
-const wrapLine = eval('(' + extractFn('wrapLine') + ')');
+const { wrapLine } = require('../app/textedit.js');
 
 const fit10 = t => t.length <= 10;
 

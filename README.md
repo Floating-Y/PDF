@@ -49,7 +49,9 @@ overwrite), `.pdf` file association, single instance, and native dialogs.
 ## Structure
 
 ```
-app/        frontend shared by both editions — index.html, app.js (all logic), style.css
+app/        frontend shared by both editions — index.html, style.css, and plain
+            scripts loaded in order: app.js (viewer & interactions), textedit.js
+            (text-edit engine), export.js, search.js, storage.js
 vendor/     pdf.js, pdf-lib, fontkit + open-source fonts (versions pinned, offline)
 src-tauri/  desktop shell (Tauri 2) — custom commands, single instance, file association
 tools/      build and fixture generators (build-web, gen-icon, gen-test-pdf*)
