@@ -1,7 +1,8 @@
 // 桌面版端到端验证（CDP 驱动 WebView2，无头无依赖）
 // 用法：
-//   1) WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 启动 pdfpro.exe
-//   2) node test/desktop-e2e.mjs
+//   1) npm run tauri -- build --debug --no-bundle --config test/tauri-e2e.json
+//   2) WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 启动 src-tauri/target/debug/pdfpro.exe
+//   3) node test/desktop-e2e.mjs（会关闭测试实例）
 import { cpSync, existsSync } from 'fs';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
@@ -71,6 +72,12 @@ await sleep(1000);
 check('Tauri 环境可用', await cdp.eval('!!window.__TAURI__ && TAURI === true'));
 check('pdf.js 已加载', await cdp.eval('!!window.pdfjsLib'));
 
+const dataPath = await cdp.eval('window.__TAURI__.path.appLocalDataDir()');
+if (!dataPath.replace(/\\/g, '/').toLowerCase().startsWith(ROOT.toLowerCase() + '/src-tauri/target/')) {
+  ws.close();
+  throw new Error('拒绝清除日常会话：请先用 test/tauri-e2e.json 构建隔离测试实例');
+}
+
 // 清掉上次运行留下的会话（IndexedDB 跨进程持久——桌面版崩溃恢复即依赖此），保证断言基数确定
 await cdp.eval('(async () => { for (const k of await idbKeys()) await idbDel(k); return true; })()');
 await sleep(300);
@@ -81,6 +88,8 @@ await sleep(2500);
 const st1 = await cdp.eval(`({ doc: S.docName, pages: S.pageOrder.length, path: S.srcPath,
   rendered: document.querySelectorAll('.page canvas').length })`);
 check('openPath 打开文档', okOpen && st1.doc === 'sample.pdf' && st1.pages === 20, JSON.stringify(st1));
+await cdp.eval('renderRecents()');
+check('桌面最近文件列表', await cdp.eval('!document.getElementById("recentBox").hidden && document.querySelectorAll(".recent-item").length > 0'));
 
 // 3. 画一个方框标注（CDP 真实鼠标事件 → pointer capture 正常）
 await cdp.eval(`setTool('rect')`);
@@ -165,6 +174,8 @@ const disk2 = await (async () => {
 })();
 check('写回烘焙无重影（恰好 2 个标注）', disk2.strokes === 2, JSON.stringify(disk2));
 check('写回后 docSize 对齐磁盘（P2）', save2.docSize === disk2.size, `${save2.docSize} vs ${disk2.size}`);
+const backup = await import('fs');
+check('二次写回仍保留首次备份', backup.readFileSync(join(__dirname, 'tmp-write-test.pdf.bak')).equals(backup.readFileSync(join(__dirname, 'sample.pdf'))));
 
 // 6c. 适应宽度下旋转当前页必须重算缩放（P3 回归）
 const rot = await cdp.eval(`(async () => { fitWidth(); await new Promise(r=>setTimeout(r,300));

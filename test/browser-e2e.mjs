@@ -266,6 +266,18 @@ try {
   const th1 = await cdp.eval('document.documentElement.dataset.theme');
   check('主题切换', th0 !== th1 && ['dark', 'light'].includes(th1), `${th0} → ${th1}`);
 
+  // 真实导出入口：取消选择器仍保留未保存标记及恢复记录。
+  const cancelled = await cdp.eval(`(async () => {
+    const picker = window.showSaveFilePicker;
+    window.showSaveFilePicker = async () => { throw Object.assign(new Error('cancel'), { name: 'AbortError' }); };
+    try {
+      await saveSession();
+      const ok = await exportPdf();
+      return { ok, dirty, recoverable: !!(await idbOp('readonly', S.sessionKey)), inert: document.body.inert };
+    } finally { window.showSaveFilePicker = picker; }
+  })()`);
+  check('取消导出保留修改与恢复记录', !cancelled.ok && cancelled.dirty && cancelled.recoverable && !cancelled.inert, JSON.stringify(cancelled));
+
   // 崩溃恢复（浏览器版路径）：会话落库 → 打开无 ?file= 的欢迎屏 → 横幅 → 继续编辑
   await sleep(1300); // 等会话防抖 800ms 落库（含上面的标注）
   await cdp.eval('clearDirty()'); // 有未导出修改时应用的 beforeunload 确认会挡住导航（无头下无人应答即挂起）；会话已落库，清掉标记安全
@@ -293,6 +305,20 @@ try {
   await cdp.mouse('mouseReleased', dr.x + 35, dr.y + 22, 'right');
   await sleep(300);
   await shot('annmenu');
+
+  // 独立验证只有尾页删除的会话，不让已有标注掩盖页数判断错误。
+  const deletedTail = await cdp.eval(`(async () => {
+    closeMenu();
+    S.anns.clear(); S.history = []; S.redo = [];
+    const confirmOriginal = window.confirm;
+    window.confirm = () => true;
+    try { await deletePageAt(S.pageOrder.length - 1); }
+    finally { window.confirm = confirmOriginal; }
+    await saveSession();
+    const session = await idbOp('readonly', S.sessionKey);
+    return { pages: S.pageOrder.length, savedPages: session?.pageOrder.length, sourcePages: session?.sourcePages, dirty };
+  })()`);
+  check('仅删除尾页也保存恢复记录', deletedTail.pages === 19 && deletedTail.savedPages === 19 && deletedTail.sourcePages === 20 && deletedTail.dirty, JSON.stringify(deletedTail));
 
   console.log(process.exitCode ? '\n有失败项' : '\n全部通过');
 } catch (err) {

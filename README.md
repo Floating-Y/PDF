@@ -21,6 +21,8 @@ npm run build   # NSIS installer in src-tauri/target/release/bundle/nsis/
 Both editions share the same `app/` frontend. The desktop edition adds a custom title
 bar, Ctrl+S write-back to the original file (automatic `.bak` backup on the first
 overwrite), `.pdf` file association, single instance, and native dialogs.
+Write-back completes in a temporary file before replacing the original; later saves
+keep the first backup. The browser server listens only on `127.0.0.1`.
 
 ## Usage
 
@@ -61,6 +63,8 @@ start.bat   one-click launcher for the browser edition
 ```
 
 `node test/all.js` runs the regression suite.
+When `rustc` is available, it also checks desktop file writes without downloading Tauri.
+Desktop E2E uses `test/tauri-e2e.json` to isolate its data; see the commands in `test/desktop-e2e.mjs`.
 
 ## License
 

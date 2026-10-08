@@ -1,0 +1,6 @@
+{
+  "identifier": "com.pdfpro.e2e",
+  "app": {
+    "appDirectoriesOverride": "./e2e-data"
+  }
+}

@@ -14,24 +14,25 @@ const ti = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
 // 分块 base64 写文件（JSON 传大数组两端都慢；512KB 原始 ≈ 700KB base64 每块）
 async function writeBytesTauri(path, bytes) {
   const CH = 512 * 1024;
+  const temporaryPath = path + '.tmp-' + crypto.randomUUID();
   for (let i = 0; ; i += CH) {
     const part = bytes.subarray(i, i + CH);
     let bin = '';
     for (let j = 0; j < part.length; j += 8192) bin += String.fromCharCode.apply(null, part.subarray(j, j + 8192));
-    await ti('write_chunk', { path, b64: btoa(bin), append: i > 0 });
+    await ti('write_chunk', { path, temporaryPath, b64: btoa(bin), append: i > 0, finish: i + CH >= bytes.length });
     if (i + CH >= bytes.length) break;
   }
 }
 // 按路径打开（桌面版：选择器 / 拖拽 / 最近打开 / 文件关联共用）
-async function openPath(path) {
+async function openPath(path, savedReload = false) {
+  if (savingPdf && !savedReload) { toast('正在保存，请稍后再打开文件'); return false; }
   toast('正在打开：' + path.replace(/^.*[\\/]/, ''), 8000);
   try {
     const bin = atob(await ti('read_file', { path }));
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     // await：写回后的 reload 依赖"打开完成"语义（跳页/恢复缩放要在视图重建后进行）
-    await openFile(new File([bytes], path.replace(/^.*[\\/]/, ''), { type: 'application/pdf' }), { path });
-    return true;
+    return await openFile(new File([bytes], path.replace(/^.*[\\/]/, ''), { type: 'application/pdf' }), { path }, null, savedReload);
   } catch (e) {
     toast('无法读取该文件：' + e);
     return false;
@@ -40,7 +41,7 @@ async function openPath(path) {
 
 // ---------------- state ----------------
 const S = {
-  pdfDoc: null, srcBytes: null, docName: '', docSize: 0, srcPath: null, // srcPath：桌面版写回原文件用
+  pdfDoc: null, srcBytes: null, docName: '', docSize: 0, srcPath: null, sessionKey: null, // srcPath：桌面版写回原文件用
   pageOrder: [],            // [{src, rot}]  src = 原文档页索引, rot = 额外旋转
   anns: new Map(),          // src -> [ann]
   scale: 1, zoomMode: 'custom', tool: 'select', color: '#f6d743',
@@ -73,20 +74,28 @@ const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&
 
 // ---------------- 未导出修改标记 ----------------
 let dirty = false;
+let savingPdf = false;
+function pageOrderIsOriginal(order, pageCount) {
+  return Array.isArray(order) && order.length === pageCount && order.every((s, i) => s.src === i && !s.rot);
+}
+function hasDocumentChanges() {
+  return !!S.pdfDoc && (!pageOrderIsOriginal(S.pageOrder, S.pdfDoc.numPages) ||
+    [...S.anns.values()].some(list => list.length));
+}
 function markDirty() {
-  if (!dirty) { dirty = true; $('#btnSave').classList.add('dirty'); }
+  dirty = hasDocumentChanges();
+  $('#btnSave').classList.toggle('dirty', dirty);
   scheduleSessionSave(); // 修改即存 IndexedDB（防抖），崩溃 / 误关后可恢复
 }
 function clearDirty() { dirty = false; $('#btnSave').classList.remove('dirty'); }
 // 撤销 / 删除可能回到"无任何实质修改"（判定规则与 saveSession 一致）：此时清除未导出标记
 function refreshDirty() {
-  if (!dirty || !S.pdfDoc) return;
-  const pristine = S.pageOrder.every((s, i) => s.src === i && !s.rot) &&
-    ![...S.anns.values()].some(l => l.length);
-  if (pristine) {
+  if (!S.pdfDoc) return;
+  if (!hasDocumentChanges()) {
     clearDirty();
-    idbDel(sessKey(S.docName, S.docSize));
-  }
+    clearTimeout(sessionSaveTimer);
+    idbDel(S.sessionKey);
+  } else markDirty();
 }
 window.addEventListener('beforeunload', e => {
   if (!TAURI && dirty && S.pdfDoc) { e.preventDefault(); e.returnValue = ''; }
@@ -105,7 +114,14 @@ if (TAURI) {
     const p = ev.payload.paths[0];
     if (/\.pdf$/i.test(p)) openPath(p); else toast('请拖入 PDF 文件');
   });
-  window.__TAURI__.event.listen('open-pdf-path', ev => openPath(ev.payload));
+  const openPathListener = window.__TAURI__.event.listen('open-pdf-path', ev => openPath(ev.payload));
+  document.addEventListener('DOMContentLoaded', async () => {
+    try {
+      await openPathListener;
+      const path = await ti('startup_pdf_path');
+      if (path) await openPath(path);
+    } catch (err) { console.error(err); toast('无法打开启动文件：' + err); }
+  }, { once: true });
   // 自绘窗口控制（工具栏兼任标题栏）：最小化 / 最大化切换（图标随状态）/ 关闭（走 onCloseRequested 的未保存确认）
   const wc = $('#winControls');
   wc.hidden = false;
@@ -156,9 +172,10 @@ document.addEventListener('drop', e => {
   openFile(f, null, item && item.getAsFileSystemHandle ? item : null);
 });
 
-async function openFile(file, handle = null, handleItem = null) {
-  if (!file) return;
-  if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') { toast('请选择 PDF 文件'); return; }
+async function openFile(file, handle = null, handleItem = null, savedReload = false) {
+  if (!file) return false;
+  if (savingPdf && !savedReload) { toast('正在保存，请稍后再打开文件'); return false; }
+  if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') { toast('请选择 PDF 文件'); return false; }
   toast('正在打开：' + file.name, 8000);
   let pwCancelled = false; // try 内声明 catch 拿不到，放外面
   try {
@@ -166,6 +183,7 @@ async function openFile(file, handle = null, handleItem = null) {
       try { const h = await handleItem.getAsFileSystemHandle(); if (h && h.kind === 'file') handle = h; } catch (e) {}
     }
     const bytes = new Uint8Array(await file.arrayBuffer());
+    const sessionKey = await sessKey(file.name, bytes, handle && handle.path);
     // cMaps/标准字体用于未内嵌字体的 PDF（常见于中文 PDF）：缺失时整页文字不渲染，只剩矢量图形
     const loadingTask = pdfjsLib.getDocument({
       data: bytes.slice(),
@@ -182,14 +200,21 @@ async function openFile(file, handle = null, handleItem = null) {
       update(pw);
     };
     const doc = await loadingTask.promise;
+    if (savingPdf && !savedReload) { await doc.destroy(); toast('正在保存，请稍后再打开文件'); return false; }
+    // 切换文件前立即留住修改，避免 800ms 防抖尚未执行就把旧状态覆盖。
+    await saveSession();
+    if (savingPdf && !savedReload) { await doc.destroy(); toast('正在保存，请稍后再打开文件'); return false; }
+    clearTimeout(sessionSaveTimer);
     if (S.pdfDoc) { try { S.pdfDoc.destroy(); } catch (e) {} } // 释放旧文档及其 worker，防止累积拖慢渲染
     S.gen++;
     cancelAllRenders();
     if (io) io.disconnect();
     S.pdfDoc = doc; S.srcBytes = bytes; S.docName = file.name; S.docSize = file.size;
     S.srcPath = (handle && handle.path) || null;
+    S.sessionKey = sessionKey;
+    $('#btnSave').disabled = true; // 视图和恢复会话就绪前不允许合成保存
     // 原文件字节留档 IndexedDB：启动横幅"继续编辑"无需用户再找原文件
-    idbOp('readwrite', 'session-file', { name: file.name, size: file.size, bytes });
+    idbOp('readwrite', 'session-file', { name: file.name, size: file.size, bytes, key: sessionKey });
     S.pageOrder = Array.from({ length: doc.numPages }, (_, i) => ({ src: i, rot: 0 }));
     S.anns = new Map(); S.tcCache = new Map(); S.history = []; S.redo = [];
     // 旧文档的搜索结果对新文档无意义，重置
@@ -209,18 +234,22 @@ async function openFile(file, handle = null, handleItem = null) {
     const zoomPref = (() => { try { return localStorage.getItem('pdf-zoom'); } catch (e) { return null; } })();
     setScale(1.2); // 构建期间的基准尺寸
     welcome.classList.add('hidden');
-    enableToolbar();
     await buildViewer(0);
     applyZoomPref(zoomPref); // 页面尺寸就绪后才能算适应宽度/页面
     recordRecent(file.name, handle, file.size);
     toast(`已打开：${file.name}（${doc.numPages} 页）`);
-    await maybeRestoreSession(file.name, file.size); // 有未导出的历史会话 → 自动恢复
+    await maybeRestoreSession(); // 有未导出的历史会话 → 自动恢复
+    enableToolbar();
+    updatePageUI();
+    return true;
   } catch (err) {
     console.error(err);
+    $('#btnSave').disabled = !S.pdfDoc || savingPdf;
     if (pwCancelled) toast('已取消打开加密文件');
     else toast(err?.name === 'InvalidPDFException' ? '文件已损坏或不是有效的 PDF'
       : err?.name === 'PasswordException' ? '需要密码或密码错误，无法打开'
       : '无法打开该文件：' + err.message);
+    return false;
   }
 }
 
@@ -785,6 +814,8 @@ function sampleTextColor(slot, cr) {
 }
 
 async function selectionToEditText() {
+  if (savingPdf) return;
+  const generation = S.gen;
   const { sel, bySlot } = selectionRectsBySlot();
   if (!bySlot.size) { toast('请先用鼠标选中要修改的文字'); return; }
   const text = String(sel);
@@ -792,6 +823,7 @@ async function selectionToEditText() {
   const anchorSpan = sel.anchorNode && sel.anchorNode.parentElement?.closest?.('.textLayer span');
   const firstSlot = [...bySlot.keys()][0];
   const fontKey = anchorSpan ? await detectFontStyle(firstSlot, anchorSpan) : { family: 'sans-serif', bold: false, italic: false };
+  if (savingPdf || generation !== S.gen) return;
   for (const [slot, g] of bySlot) {
     const src = S.pageOrder[slot].src;
     const size = measureFontSize(sel) || (g.rects[0][3] - g.rects[0][1]) * 0.75;
@@ -800,15 +832,20 @@ async function selectionToEditText() {
     const by1 = Math.min(...g.rects.map(r => r[1])), by2 = Math.max(...g.rects.map(r => r[3]));
     const m = (slot === firstSlot && anchorSpan) ? await spanItemMetrics(slot, anchorSpan.textContent, by1, by2) : {};
     const faceId = m.fontName ? await ensureEmbeddedFace(src, m.fontName) : null;
+    if (savingPdf || generation !== S.gen) return;
     const a = {
-      id: 'a' + annSeq++, type: 'edit', page: src, x1: bx1, y1: by1, x2: bx2, y2: by2, rects: g.rects,
+      type: 'edit', page: src, x1: bx1, y1: by1, x2: bx2, y2: by2, rects: g.rects,
       text, origText: text, size: m.size || size, color, baselineY: m.baselineY ?? null, fontKey,
       fontName: m.fontName || null, faceId,
     };
-    if (!S.anns.has(src)) S.anns.set(src, []);
-    S.anns.get(src).push(a);
     added.push(a);
-    renderAnnotations(slot);
+  }
+  // 所有异步字体读取结束后一次加入，避免保存或换文档时留下半组标注。
+  for (const a of added) {
+    a.id = 'a' + annSeq++;
+    if (!S.anns.has(a.page)) S.anns.set(a.page, []);
+    S.anns.get(a.page).push(a);
+    renderAnnotationsBySrc(a.page);
   }
   pushHistoryAdd(added);
   sel.removeAllRanges();
@@ -1031,6 +1068,8 @@ function layoutWrapped(ann, text) {
 
 
 async function startLineEdit(slot, e) {
+  if (savingPdf) return;
+  const generation = S.gen;
   finishEditing();
   const spans = [...pageEls[slot].querySelectorAll('.textLayer span')];
   let spanEl = e.target.closest('.textLayer span');
@@ -1082,6 +1121,7 @@ async function startLineEdit(slot, e) {
   // PDF 本质：一行 = 一串各自定位的文字运行（run）。保留运行结构，
   // 提交后按字符 diff 分配回各 run，每个 run 在原位置用原字体重绘。
   const tc = await getTextContent(src);
+  if (savingPdf || generation !== S.gen) return;
   const lineItems = tc.items
     .filter(it => it.str && it.transform[5] >= y1 - 3 && it.transform[5] <= y2 + 3 &&
       it.transform[4] >= x1 - 3 && it.transform[4] <= x2 + 3)
@@ -1894,6 +1934,7 @@ function switchTab(name) {
 
 // ---------------- 键盘 ----------------
 document.addEventListener('keydown', e => {
+  if (savingPdf) { e.preventDefault(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
     e.preventDefault();
     const sb = $('#searchBox');

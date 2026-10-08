@@ -9,14 +9,18 @@ function idbOpen() {
   });
 }
 async function idbOp(mode, key, val) {
+  let db;
   try {
-    const db = await idbOpen();
+    db = await idbOpen();
     return await new Promise((res, rej) => {
-      const rq = db.transaction('kv', mode).objectStore('kv')[mode === 'readonly' ? 'get' : 'put'](mode === 'readonly' ? key : val, key);
-      rq.onsuccess = () => res(rq.result);
-      rq.onerror = () => rej(rq.error);
+      const tx = db.transaction('kv', mode);
+      const rq = tx.objectStore('kv')[mode === 'readonly' ? 'get' : 'put'](mode === 'readonly' ? key : val, key);
+      tx.oncomplete = () => res(rq.result);
+      tx.onerror = () => rej(tx.error);
+      tx.onabort = () => rej(tx.error);
     });
   } catch (e) { return null; }
+  finally { if (db) db.close(); }
 }
 async function loadRecents() { return (await idbOp('readonly', 'recents')) || []; }
 async function saveRecents(list) { await idbOp('readwrite', 'recents', list); }
@@ -36,15 +40,16 @@ async function recordRecent(name, handle, size) {
   if (!handle) return; // 只有拿到文件句柄的打开方式（选择器/拖拽）才能"一键重开"
   const list = [
     { name, handle, size, at: Date.now() },
-    // 去重：同名同大小，或桌面版同路径（写回后文件大小变了，只按大小会留下重复条目）
-    ...(await loadRecents()).filter(e => !(e.name === name && e.size === size) &&
-      !(e.handle?.path && handle?.path && e.handle.path === handle.path)),
+    // 桌面版只按路径去重：同名同大小也可能是不同目录的两份文件。
+    ...(await loadRecents()).filter(e => e.handle?.path && handle.path
+      ? normPath(e.handle.path) !== normPath(handle.path)
+      : !(e.name === name && e.size === size)),
   ].slice(0, 6);
   await saveRecents(list);
   renderRecents();
 }
 async function renderRecents() {
-  if (!('showOpenFilePicker' in window)) return; // 不支持文件句柄的浏览器不显示
+  if (!TAURI && !('showOpenFilePicker' in window)) return; // 桌面版用路径，不依赖浏览器文件句柄
   const list = await loadRecents();
   const box = $('#recentBox'), listEl = $('#recentList');
   if (!list.length) { box.hidden = true; return; }
@@ -59,7 +64,7 @@ async function renderRecents() {
       // 桌面版：recents 存的是路径，直接读（无权限重授权流程）
       if (e.handle && e.handle.path) {
         if (!(await openPath(e.handle.path))) {
-          await saveRecents((await loadRecents()).filter(x => !(x.name === e.name && x.size === e.size)));
+          await saveRecents((await loadRecents()).filter(x => !x.handle?.path || normPath(x.handle.path) !== normPath(e.handle.path)));
           renderRecents();
         }
         return;
@@ -82,10 +87,14 @@ async function renderRecents() {
 renderRecents();
 
 // ---------------- 编辑会话自动保存（崩溃 / 误关后恢复） ----------------
-// 每次修改防抖 800ms 写入 IndexedDB（按 文件名+大小 分 key）；导出成功或改回原样即清除。
+// 每次修改防抖 800ms 写入 IndexedDB；内容摘要隔离同名同大小文件，桌面版再按路径隔离副本。
 // beforeunload 只能拦正常关闭，崩溃 / 杀进程 / 断电全靠这里兜底。
 const SESS_PREFIX = 'sess:';
-const sessKey = (name, size) => SESS_PREFIX + name + ':' + size;
+async function sessKey(name, bytes, path) {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  const hash = [...digest].map(n => n.toString(16).padStart(2, '0')).join('');
+  return SESS_PREFIX + JSON.stringify([path ? normPath(path) : name, hash]);
+}
 
 async function idbKeys() {
   try {
@@ -98,10 +107,19 @@ async function idbKeys() {
   } catch (e) { return []; }
 }
 async function idbDel(key) {
+  if (!key) return;
+  let db;
   try {
-    const db = await idbOpen();
-    db.transaction('kv', 'readwrite').objectStore('kv').delete(key);
+    db = await idbOpen();
+    await new Promise((res, rej) => {
+      const tx = db.transaction('kv', 'readwrite');
+      tx.objectStore('kv').delete(key);
+      tx.oncomplete = res;
+      tx.onerror = () => rej(tx.error);
+      tx.onabort = () => rej(tx.error);
+    });
   } catch (e) {}
+  finally { if (db) db.close(); }
 }
 
 let sessionSaveTimer = null;
@@ -110,30 +128,33 @@ function scheduleSessionSave() {
   sessionSaveTimer = setTimeout(saveSession, 800);
 }
 async function saveSession() {
-  if (!S.pdfDoc || !dirty) return;
+  if (!S.pdfDoc || !S.sessionKey) return false;
+  if (!hasDocumentChanges()) { await idbDel(S.sessionKey); return true; }
+  if (!dirty) return false;
   const anns = [];
   for (const list of S.anns.values()) anns.push(...list);
-  const pristine = S.pageOrder.every((s, i) => s.src === i && !s.rot);
-  if (!anns.length && pristine) { idbDel(sessKey(S.docName, S.docSize)); return; } // 改回原样=没改，不留会话
-  await idbOp('readwrite', sessKey(S.docName, S.docSize), {
+  const result = await idbOp('readwrite', S.sessionKey, {
     name: S.docName, size: S.docSize, at: Date.now(), slot: S.currentSlot, path: S.srcPath,
+    sourcePages: S.pdfDoc.numPages,
     pageOrder: S.pageOrder.map(s => ({ src: s.src, rot: s.rot })),
     anns, annSeq,
   });
+  if (result === null) toast('自动保存失败，未导出的修改无法在关闭后恢复，请及时保存', 5000);
+  return result !== null;
 }
 
 // 打开文件时若存有该文件的未导出会话 → 自动应用（撤销栈不可序列化，恢复后为空）
-async function maybeRestoreSession(name, size) {
-  const st = await idbOp('readonly', sessKey(name, size));
-  if (!st || !Array.isArray(st.anns)) return;
-  const pristine = (st.pageOrder || []).every((s, i) => s.src === i && !s.rot);
+async function maybeRestoreSession() {
+  const st = await idbOp('readonly', S.sessionKey);
+  if (!st || !Array.isArray(st.anns) || !Array.isArray(st.pageOrder)) return;
+  const pristine = pageOrderIsOriginal(st.pageOrder, S.pdfDoc.numPages);
   if (!st.anns.length && pristine) return;
   await applySession(st);
   toast(`已恢复上次未导出的修改（${st.anns.length} 处标注${pristine ? '' : '，含页面改动'}）`);
 }
 async function applySession(st) {
   S.pageOrder = st.pageOrder.map(s => ({ src: s.src, rot: s.rot }));
-  S.srcPath = st.path || null; // 桌面版：恢复后 Ctrl+S 仍可写回原文件
+  // 保存路径只来自这次实际打开的文件；缓存会话不能把 Ctrl+S 指向另一份原件。
   S.anns = new Map();
   for (const a of st.anns) {
     if (!S.anns.has(a.page)) S.anns.set(a.page, []);
@@ -167,12 +188,18 @@ async function renderRecover() {
   if (!best) { box.hidden = true; return; }
   const { st, key } = best;
   box.hidden = false;
-  const pristine = (st.pageOrder || []).every((s, i) => s.src === i && !s.rot);
+  const pristine = pageOrderIsOriginal(st.pageOrder, st.sourcePages ?? st.pageOrder?.length);
   $('#recoverMsg').textContent = `${st.name} · ${st.anns.length} 处标注${pristine ? '' : ' · 含页面改动'} · ${fmtTime(st.at)}`;
   $('#btnRecover').onclick = async () => {
     const f = await idbOp('readonly', 'session-file');
-    if (f && f.name === st.name && f.size === st.size) {
-      openFile(new File([f.bytes], st.name, { type: 'application/pdf' })); // 打开后自动应用会话
+    if (TAURI && st.path && await openPath(st.path) && S.sessionKey === key) return;
+    if (f && (f.key === key || (!f.key && f.name === st.name && f.size === st.size))) {
+      if (await openFile(new File([f.bytes], st.name, { type: 'application/pdf' }))) {
+        // 旧版 key 及桌面字节副本通过显式“继续编辑”恢复，副本没有原文件写入权限。
+        await applySession(st);
+        if (S.sessionKey !== key && await saveSession()) await idbDel(key);
+        if (TAURI && st.path) toast('原文件已变化或无法读取，已恢复为副本，请另存为', 5000);
+      }
     } else {
       toast(`请重新打开「${st.name}」，未导出的修改会自动恢复`);
     }

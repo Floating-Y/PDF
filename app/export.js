@@ -17,20 +17,32 @@ function hexRgb(hex) {
 }
 
 async function exportPdf() {
-  if (!S.pdfDoc) return;
-  const btn = $('#btnSave');
-  btn.disabled = true;
+  if (!S.pdfDoc || savingPdf || $('#btnSave').disabled) return false;
+  document.activeElement?.blur(); // 导出前提交仍在输入的标注
+  setPdfSaving(true);
+  const { docName, sessionKey } = S;
   toast('正在导出…（含字体嵌入，大文件可能需要几十秒）', 60000);
   try {
     const bytes = await buildExportBytes();
-    await saveBytes(bytes, S.docName.replace(/\.pdf$/i, '') + '-edited.pdf');
+    if (!(await saveBytes(bytes, docName.replace(/\.pdf$/i, '') + '-edited.pdf'))) {
+      toast('已取消导出');
+      return false;
+    }
     clearDirty();
-    idbDel(sessKey(S.docName, S.docSize)); // 已导出，恢复会话不再需要
+    clearTimeout(sessionSaveTimer);
+    await idbDel(sessionKey); // 已导出，恢复会话不再需要
+    return true;
   } catch (err) {
     console.error(err);
     toast(exportErrMsg(err), 4000);
-  }
-  btn.disabled = false;
+    return false;
+  } finally { setPdfSaving(false); }
+}
+
+function setPdfSaving(value) {
+  savingPdf = value;
+  document.body.inert = value; // 合成及写回期间不允许再编辑，防止重载丢掉并发修改
+  $('#btnSave').disabled = value;
 }
 
 function exportErrMsg(err) {
@@ -44,24 +56,30 @@ function exportErrMsg(err) {
 // 标注已烘焙为页面内容，重开后自然可见；不重建的话，后续保存会拿旧页索引索引新文档（崩溃）
 // 或把已烘焙的标注再画一遍（重影）。撤销栈随重建清空 = 保存点。
 async function saveInPlace() {
-  if (!S.pdfDoc) return;
-  if (!S.srcPath) { exportPdf(); return; }
+  if (!S.pdfDoc || savingPdf || $('#btnSave').disabled) return false;
+  if (!S.srcPath) return await exportPdf();
+  document.activeElement?.blur();
+  setPdfSaving(true);
+  const { srcPath: targetPath, sessionKey } = S;
   toast('正在保存…（合成修改，与导出相同）', 60000);
   try {
     const bytes = await buildExportBytes();
-    await writeBytesTauri(S.srcPath, bytes);
-    idbDel(sessKey(S.docName, S.docSize)); // 会话键含旧文件大小，重建前删掉
-    await reloadAfterInPlaceWrite();
-    toast('已保存：' + S.docName);
+    await writeBytesTauri(targetPath, bytes);
+    clearDirty();
+    clearTimeout(sessionSaveTimer);
+    await idbDel(sessionKey); // key 含旧文件摘要，重建前删掉
+    if (await reloadAfterInPlaceWrite()) toast('已保存：' + S.docName);
+    return true;
   } catch (err) {
     console.error(err);
     toast(exportErrMsg(err).replace('导出', '保存'), 4000);
-  }
+    return false;
+  } finally { setPdfSaving(false); }
 }
 const normPath = p => p.replace(/\//g, '\\').toLowerCase(); // Windows 路径比较：分隔符 + 大小写归一
 async function reloadAfterInPlaceWrite() {
   const { scale, zoomMode, currentSlot } = S;
-  if (!(await openPath(S.srcPath))) { toast('已保存，但重新读取文件失败，请手动重新打开'); return; }
+  if (!(await openPath(S.srcPath, true))) { toast('已保存，但重新读取文件失败，请手动重新打开'); return false; }
   if (S.pdfDoc) {
     // 先跳页再适配：fitWidth/fitPage 按当前页尺寸计算，顺序反了会用错页
     jumpToSlot(Math.min(currentSlot, S.pageOrder.length - 1));
@@ -69,13 +87,14 @@ async function reloadAfterInPlaceWrite() {
     else if (zoomMode === 'fitp') fitPage();
     else if (Math.abs(scale - S.scale) > 1e-6) setScale(scale);
   }
+  return true;
 }
 
 // 打印：无修改直接打印原文件；有修改先按导出管线合成（标注 / 删页 / 旋转全部生效）
 async function printPdf() {
   if (!S.pdfDoc) return;
   try {
-    if (dirty) {
+    if (hasDocumentChanges()) {
       toast('正在准备打印…（合成修改，与导出相同）', 60000);
       printBytes(await buildExportBytes());
     } else {
@@ -232,33 +251,35 @@ function drawAnn(page, a, fontObjs, helv, embeddedFonts, embeddedFk) {
 async function saveBytes(bytes, name) {
   if (TAURI) {
     const path = await ti('dialog_save_pdf', { defaultName: name });
-    if (!path) return; // 用户取消
+    if (!path) return false; // 用户取消
     await writeBytesTauri(path, bytes);
     // 在另存为里选中了原文件 = 变相写回，同样要重建状态（否则后续保存错位/重影）
     if (S.srcPath && normPath(path) === normPath(S.srcPath)) {
-      idbDel(sessKey(S.docName, S.docSize));
-      await reloadAfterInPlaceWrite();
-      toast('已保存（覆盖原文件）：' + S.docName);
+      clearDirty();
+      clearTimeout(sessionSaveTimer);
+      await idbDel(S.sessionKey);
+      if (await reloadAfterInPlaceWrite()) toast('已保存（覆盖原文件）：' + S.docName);
     } else {
       toast('已导出：' + path.replace(/^.*[\\/]/, ''));
     }
-    return;
+    return true;
   }
   if (window.showSaveFilePicker) {
+    let handle;
     try {
-      const handle = await window.showSaveFilePicker({
+      handle = await window.showSaveFilePicker({
         suggestedName: name,
         types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }],
       });
-      const w = await handle.createWritable();
-      await w.write(bytes);
-      await w.close();
-      toast('已导出：' + handle.name);
-      return;
     } catch (e) {
-      if (e && e.name === 'AbortError') return; // 用户取消
-      console.error(e);
+      if (e && e.name === 'AbortError') return false; // 仅选择器取消不算写入失败
+      throw e;
     }
+    const w = await handle.createWritable();
+    try { await w.write(bytes); await w.close(); }
+    catch (err) { try { await w.abort(); } catch (e) {} throw err; }
+    toast('已导出：' + handle.name);
+    return true;
   }
   const blob = new Blob([bytes], { type: 'application/pdf' });
   const url = URL.createObjectURL(blob);
@@ -268,4 +289,5 @@ async function saveBytes(bytes, name) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
   toast('已下载：' + name);
+  return true;
 }
