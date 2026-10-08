@@ -89,8 +89,18 @@ body.tauri #toolbar { padding-right: 152px; }
 .tb-group { display: flex; align-items: center; gap: 6px; }
 .tb-group.grow { flex: 1; min-width: 110px; }
 .tb-sep { width: 1px; height: 24px; background: var(--line-strong); flex: none; }
+.tb-spacer { flex: 1; min-width: 20px; height: 1px; }
 
-#toolbar button {
+/* ---------- 第二层工具条：阅读/标注工具与样式选项 ---------- */
+#subbar {
+  display: flex; align-items: center; gap: 6px; padding: 5px 10px;
+  background: var(--bar); border-bottom: 1px solid var(--line);
+  box-shadow: var(--shadow-1); flex: none; position: relative; z-index: 2;
+}
+body.no-doc #subbar { display: none; }
+#colorGroup[hidden] { display: none; } /* .tb-group 的 display:flex 会压过 hidden 属性 */
+
+#toolbar button, #subbar button {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   height: 30px; padding: 0 8px;
   background: var(--btn); color: var(--txt);
@@ -98,10 +108,10 @@ body.tauri #toolbar { padding-right: 152px; }
   cursor: pointer; font-size: 12.5px; font-family: inherit;
   transition: background .15s, border-color .15s, color .15s, transform .15s, box-shadow .15s;
 }
-#toolbar button:hover:not(:disabled) { background: var(--btn-hover); border-color: var(--line-strong); }
-#toolbar button:active:not(:disabled) { transform: translateY(1px); }
-#toolbar button:disabled { opacity: .38; cursor: default; }
-#toolbar button:focus-visible, #toolbar input:focus-visible, #sidebar button:focus-visible {
+#toolbar button:hover:not(:disabled), #subbar button:hover:not(:disabled) { background: var(--btn-hover); border-color: var(--line-strong); }
+#toolbar button:active:not(:disabled), #subbar button:active:not(:disabled) { transform: translateY(1px); }
+#toolbar button:disabled, #subbar button:disabled { opacity: .38; cursor: default; }
+#toolbar button:focus-visible, #toolbar input:focus-visible, #subbar button:focus-visible, #subbar input:focus-visible, #sidebar button:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 1px;
 }
 .btn-labeled svg { width: 14px; height: 14px; flex: none; }
@@ -120,13 +130,13 @@ body.tauri #toolbar { padding-right: 152px; }
   background: var(--field); border: 1px solid var(--line);
   border-radius: 9px; padding: 2px;
 }
-#toolbar .seg > button {
+#toolbar .seg > button, #subbar .seg > button {
   background: transparent; border: none; color: var(--muted);
   height: 26px; min-width: 26px; padding: 0 5px; border-radius: 6px;
 }
-#toolbar .seg > button:hover:not(:disabled) { background: var(--btn-hover); color: var(--txt); }
-#toolbar .seg > button:active:not(:disabled) { transform: none; }
-#toolbar .seg > button.active { background: var(--accent); color: #fff; }
+#toolbar .seg > button:hover:not(:disabled), #subbar .seg > button:hover:not(:disabled) { background: var(--btn-hover); color: var(--txt); }
+#toolbar .seg > button:active:not(:disabled), #subbar .seg > button:active:not(:disabled) { transform: none; }
+#toolbar .seg > button.active, #subbar .seg > button.active { background: var(--accent); color: #fff; }
 .seg-div { width: 1px; height: 16px; background: var(--line-strong); margin: 0 3px; flex: none; }
 
 /* 自绘窗口控制（桌面版无原生标题栏，工具栏兼任）：绝对定位钉在右上角，
@@ -146,7 +156,7 @@ body.tauri #toolbar { padding-right: 152px; }
 #winMax.maximized .ic-max { display: none; }
 
 /* 图标 */
-#toolbar button svg, .search-wrap > svg {
+#toolbar button svg, #subbar button svg, .search-wrap > svg {
   width: 15px; height: 15px; flex: none;
   fill: none; stroke: currentColor; stroke-width: 1.5;
   stroke-linecap: round; stroke-linejoin: round;
@@ -187,21 +197,7 @@ body.tauri #toolbar { padding-right: 152px; }
 #searchBox:focus { border-color: var(--accent); outline: none; }
 #searchBox::placeholder { color: var(--muted); }
 
-/* 搜索面板（工具栏下拉） */
-#searchPanel {
-  position: absolute; top: 36px; right: 0; z-index: 30;
-  display: flex; align-items: center; gap: 8px;
-  background: var(--bar); border: 1px solid var(--line-strong);
-  border-radius: 9px; padding: 6px 8px; box-shadow: var(--shadow-3);
-}
-#searchPanel button {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 24px; height: 24px; padding: 0;
-  background: var(--field); color: var(--txt); border: 1px solid var(--line);
-  border-radius: 6px; cursor: pointer;
-}
-#searchPanel button:hover { background: var(--btn-hover); }
-#searchPanel button svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+/* 搜索计数与选项（侧栏「搜索」页签头部） */
 #searchCount { font-size: 12px; color: var(--muted); min-width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
 .stoggle {
   display: inline-flex; align-items: center; gap: 5px;
@@ -212,13 +208,13 @@ body.tauri #toolbar { padding-right: 152px; }
 .stoggle input { accent-color: var(--accent); margin: 0; }
 
 /* 颜色圆点 */
-#toolbar .color-dot {
+#toolbar .color-dot, #subbar .color-dot {
   width: 19px; height: 19px; padding: 0; border-radius: 50%;
   border: 2px solid var(--dot-ring);
   box-shadow: inset 0 0 0 1px rgba(0,0,0,.4);
 }
-#toolbar .color-dot:hover:not(:disabled) { transform: scale(1.15); border-color: var(--line-strong); }
-#toolbar .color-dot.active {
+#toolbar .color-dot:hover:not(:disabled), #subbar .color-dot:hover:not(:disabled) { transform: scale(1.15); border-color: var(--line-strong); }
+#toolbar .color-dot.active, #subbar .color-dot.active {
   border-color: transparent;
   box-shadow: 0 0 0 2px var(--bar), 0 0 0 4px var(--accent), inset 0 0 0 1px rgba(0,0,0,.4);
 }
@@ -288,6 +284,7 @@ body.no-doc #sidebar { display: none; }
   background: var(--panel); z-index: 1;
 }
 #tab-results .rnav { display: inline-flex; align-items: center; gap: 3px; }
+#tab-results .rtools { display: flex; gap: 14px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
 #tab-results .rnav button {
   background: var(--field); border: 1px solid var(--line); color: var(--txt);
   border-radius: 5px; width: 22px; height: 20px; cursor: pointer;
@@ -313,7 +310,7 @@ body.no-doc #sidebar { display: none; }
   position: relative; height: 100%; overflow: auto;
   background: var(--bg-deep); outline: none; padding: 26px 0;
 }
-#viewer[data-tool="rect"] .page-inner, #viewer[data-tool="ink"] .page-inner, #viewer[data-tool="text"] .page-inner { cursor: crosshair; }
+#viewer[data-tool="rect"] .page-inner, #viewer[data-tool="ink"] .page-inner, #viewer[data-tool="text"] .page-inner, #viewer[data-tool="erase"] .page-inner { cursor: crosshair; }
 #viewer[data-tool="edittext"] .page-inner, #viewer[data-tool="edittext"] .textLayer { cursor: text; }
 /* 手型工具 / 空格平移：抓取光标（覆盖 pdf_viewer 的文本光标），拖动中 grabbing */
 #viewer[data-tool="hand"], #viewer.space-pan { cursor: grab; }
@@ -361,6 +358,7 @@ body.no-doc #sidebar { display: none; }
   border: 1px solid rgba(255,255,255,.16);
   border-radius: 9px; box-shadow: var(--shadow-3);
 }
+#selBar[hidden] { display: none; } /* display:flex 会压过 hidden 属性，需显式关掉 */
 #selBar button {
   display: inline-flex; align-items: center; gap: 5px;
   height: 26px; padding: 0 10px; border: none; border-radius: 6px;

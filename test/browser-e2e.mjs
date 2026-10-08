@@ -1,7 +1,7 @@
 // 浏览器版端到端验证（无头 Chrome/Edge + CDP，零依赖）：自动起 server.js，用 ?file= 直开测试文档
 // 用法：node test/browser-e2e.mjs   （结束自动清理进程；需本机装有 Chrome 或 Edge，或设 CHROME 环境变量）
 // 覆盖：?file 直开、缩放记忆、手型平移、空格临时平移、Ctrl+拖拽框选缩放、Ctrl+滚轮光标锚点、
-//       标注几何命中、色板改色、右键菜单（标注/页面/选区）。桌面版验证见 desktop-e2e.mjs。
+//       标注几何命中、色板改色、右键菜单（标注/页面/选区）、橡皮擦。桌面版验证见 desktop-e2e.mjs。
 import { spawn } from 'child_process';
 import { existsSync, rmSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
@@ -118,10 +118,10 @@ try {
   if (!opened) throw new Error('文档未打开，后续测试无意义');
   await sleep(1500); // 首屏渲染
 
-  // 手型工具按钮在工具栏且可用；图标实际渲染出尺寸；工具栏加按钮后无溢出/异常换行
-  check('手型工具按钮', await cdp.eval('(() => { const b = document.querySelector("#toolGroup button[data-tool=hand]"); return !!b && !b.disabled; })()'));
-  check('手型图标渲染', await cdp.eval('(() => { const r = document.querySelector("#toolGroup button[data-tool=hand] svg path").getBoundingClientRect(); return r.width > 5 && r.height > 5; })()'));
-  check('工具栏无溢出', await cdp.eval('(() => { const t = document.getElementById("toolbar"); return t.scrollWidth <= t.clientWidth + 1 && t.getBoundingClientRect().height < 120; })()'));
+  // 手型工具按钮在工具条且可用；图标实际渲染出尺寸；两层工具条无溢出/异常换行
+  check('手型工具按钮', await cdp.eval('(() => { const b = document.querySelector("#subbar button[data-tool=hand]"); return !!b && !b.disabled; })()'));
+  check('手型图标渲染', await cdp.eval('(() => { const r = document.querySelector("#subbar button[data-tool=hand] svg path").getBoundingClientRect(); return r.width > 5 && r.height > 5; })()'));
+  check('工具栏无溢出', await cdp.eval('(() => { const t = document.getElementById("toolbar"), s = document.getElementById("subbar"); return t.scrollWidth <= t.clientWidth + 1 && s.scrollWidth <= s.clientWidth + 1 && t.getBoundingClientRect().height < 120 && s.getBoundingClientRect().height < 80; })()'));
 
   // 缩放状态记忆
   await cdp.eval('setScale(2)');
@@ -218,6 +218,71 @@ try {
   await sleep(200);
   const col3 = await cdp.eval('[...S.anns.values()].flat()[0].color');
   check('右键菜单改色', col3 === '#e5604c', col3);
+
+  // 橡皮擦：单击删整笔 / 拖动擦局部拆分 / 撤销重做
+  await cdp.eval('setTool("ink")');
+  const ip = await cdp.eval('(() => { const r = document.querySelector(".page .page-inner").getBoundingClientRect(); return { x: r.left + r.width * 0.25, y: r.top + r.height * 0.78 }; })()');
+  await cdp.mouse('mousePressed', ip.x, ip.y);
+  for (let i = 1; i <= 12; i++) await cdp.mouse('mouseMoved', ip.x + i * 12, ip.y);
+  await cdp.mouse('mouseReleased', ip.x + 144, ip.y);
+  await sleep(400);
+  const ink1 = await cdp.eval('[...S.anns.values()].flat().filter(a => a.type === "ink").map(a => a.points.length)');
+  check('画涂鸦笔画', ink1.length === 1 && ink1[0] === 13, JSON.stringify(ink1));
+  const evp = await cdp.eval(`(() => { const a = [...S.anns.values()].flat().find(a => a.type === "ink");
+    const slot = S.pageOrder.findIndex(s => s.src === a.page); const v = S.views.get(slot);
+    const [vx, vy] = v.viewport.convertToViewportPoint(a.points[6][0], a.points[6][1]);
+    const ir = pageEls[slot].querySelector(".page-inner").getBoundingClientRect();
+    return { x: Math.round(ir.left + vx), y: Math.round(ir.top + vy) }; })()`);
+  await cdp.eval('setTool("erase")');
+  await cdp.mouse('mousePressed', evp.x, evp.y);
+  await cdp.mouse('mouseReleased', evp.x, evp.y);
+  await sleep(300);
+  check('橡皮擦单击删整笔', await cdp.eval('[...S.anns.values()].flat().filter(a => a.type === "ink").length') === 0);
+  await cdp.eval('undoLast()');
+  const ink2 = await cdp.eval('[...S.anns.values()].flat().filter(a => a.type === "ink").map(a => a.points.length)');
+  check('整笔删除可撤销', ink2.length === 1 && ink2[0] === 13, JSON.stringify(ink2));
+  await cdp.mouse('mousePressed', evp.x, evp.y - 40);
+  for (let i = 1; i <= 8; i++) await cdp.mouse('mouseMoved', evp.x + i, evp.y - 40 + i * 10);
+  await cdp.mouse('mouseReleased', evp.x + 8, evp.y + 40);
+  await sleep(300);
+  const ink3 = await cdp.eval('[...S.anns.values()].flat().filter(a => a.type === "ink").map(a => a.points.length)');
+  check('橡皮擦拖动擦局部拆分', ink3.length === 2 && ink3[0] + ink3[1] < 13, JSON.stringify(ink3));
+  await cdp.eval('undoLast()');
+  check('局部擦除可撤销', JSON.stringify(await cdp.eval('[...S.anns.values()].flat().filter(a => a.type === "ink").map(a => a.points.length)')) === JSON.stringify([13]));
+  await cdp.eval('redoNext()');
+  const ink4 = await cdp.eval('[...S.anns.values()].flat().filter(a => a.type === "ink").map(a => a.points.length)');
+  check('局部擦除可重做', ink4.length === 2, JSON.stringify(ink4));
+  await cdp.eval('undoLast()'); // 收尾：恢复完整笔画
+
+  // 改字：短行变长吃同栏空间不折行（段落末行/短行场景）；超栏才折行
+  const hd = await cdp.eval(`(() => { for (const s of document.querySelectorAll('.textLayer span')) {
+    if (/Page 1 of 20/.test(s.textContent)) { const r = s.getBoundingClientRect();
+      return { x: r.left + r.width * 0.4, y: r.top + r.height / 2 }; } } return null; })()`);
+  check('找到短行标题', !!hd);
+  await cdp.eval('setTool("edittext")');
+  await cdp.mouse('mousePressed', hd.x, hd.y);
+  await cdp.mouse('mouseReleased', hd.x, hd.y);
+  await sleep(1200);
+  await cdp.eval(`(() => { const el = document.querySelector(".ann-text.editing");
+    el.focus(); document.execCommand("selectAll", false, null);
+    document.execCommand("insertText", false, "Page 111 of 20"); return true; })()`);
+  await cdp.eval('document.querySelector(".ann-text.editing").blur()');
+  await sleep(500);
+  const edit1 = await cdp.eval(`(() => { const a = [...S.anns.values()].flat().find(a => a.type === "edit");
+    return { runs: a.runs.map(r => r.cur), wrapped: !!a.wrapped }; })()`);
+  check('短行改长不折行', edit1.runs.length === 1 && edit1.runs[0] === 'Page 111 of 20' && !edit1.wrapped, JSON.stringify(edit1));
+  await cdp.mouse('mousePressed', hd.x, hd.y);
+  await cdp.mouse('mouseReleased', hd.x, hd.y);
+  await sleep(1000);
+  await cdp.eval(`(() => { const el = document.querySelector(".ann-text.editing");
+    el.focus(); document.execCommand("selectAll", false, null);
+    document.execCommand("insertText", false, "Page 111111 of 20 with a long tail that must wrap to the next line somewhere here"); return true; })()`);
+  await cdp.eval('document.querySelector(".ann-text.editing").blur()');
+  await sleep(500);
+  const edit2 = await cdp.eval(`(() => { const a = [...S.anns.values()].flat().find(a => a.type === "edit");
+    return { n: a.runs.length }; })()`);
+  check('超栏改字折行', edit2.n >= 2, JSON.stringify(edit2));
+  await cdp.eval('removeAnn([...S.anns.values()].flat().find(a => a.type === "edit").id)'); // 收尾：移除改字标注
 
   // 右键菜单：页面（避开已画标注的区域）
   await cdp.mouse('mousePressed', 830, 500, 'right');

@@ -220,8 +220,7 @@ async function openFile(file, handle = null, handleItem = null, savedReload = fa
     // 旧文档的搜索结果对新文档无意义，重置
     searchState = { q: '', results: [], cur: -1 };
     $('#searchBox').value = '';
-    updateSearchCount(); showSearchPanel(false);
-    $('#tab-results').innerHTML = '<div class="muted pad">输入关键词后回车搜索</div>';
+    resetResultsPanel();
     S.selectedId = null; S.editingId = null; S.currentSlot = 0;
     S.views.clear(); S.slotDims.clear();
     annSeq = 1;
@@ -254,7 +253,7 @@ async function openFile(file, handle = null, handleItem = null, savedReload = fa
 }
 
 function enableToolbar() {
-  $$('#toolbar button, #toolbar input').forEach(b => { b.disabled = false; });
+  $$('#toolbar button, #toolbar input, #subbar button, #subbar input').forEach(b => { b.disabled = false; });
   updateAnnUI();
   updateUndoUI();
 }
@@ -262,6 +261,14 @@ function enableToolbar() {
 // 删标注按钮的可用状态跟随"是否有选中标注"，而不是一直可点
 function updateAnnUI() {
   $('#btnDeleteAnn').disabled = !S.pdfDoc || !S.selectedId;
+  updateStyleGroup();
+}
+
+// 颜色组只对"会用当前颜色画新东西"的工具出现；select 工具在选中标注（可就地改色）时也出现。
+// hand / edittext / 改字与颜色无关 → 隐藏（工具条高度不变，只收起该组）
+const COLOR_TOOLS = new Set(['highlight', 'rect', 'ink', 'text']);
+function updateStyleGroup() {
+  $('#colorGroup').hidden = !(COLOR_TOOLS.has(S.tool) || (S.tool === 'select' && S.selectedId));
 }
 
 // ---------------- 撤销 / 重做 ----------------
@@ -650,15 +657,17 @@ function renderAnnotationsBySrc(src) {
 }
 
 // ---------------- 工具与交互 ----------------
-$('#toolGroup').addEventListener('click', e => {
+// data-tool 按钮分布在第二层的两组分段里（viewTools / toolGroup），监听整个工具条
+$('#subbar').addEventListener('click', e => {
   const btn = e.target.closest('button[data-tool]');
   if (!btn || btn.disabled) return;
   setTool(btn.dataset.tool);
 });
 function setTool(t) {
   S.tool = t;
-  $$('#toolGroup button[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === t));
+  $$('#subbar button[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === t));
   viewer.dataset.tool = t;
+  updateStyleGroup();
   hideSelBar();
 }
 $('#colorGroup').addEventListener('click', e => {
@@ -711,6 +720,10 @@ selBar.addEventListener('click', e => {
   else selectionToEditText();
 });
 viewer.addEventListener('scroll', hideSelBar);
+// 点击工具条之外任何地方即收起（捕获阶段；拖拽新选区时 selectionchange 会再弹出）
+document.addEventListener('pointerdown', e => {
+  if (!selBar.hidden && !e.target.closest('#selBar')) hideSelBar();
+}, true);
 
 // 高亮 / 改字：把当前文本选区按页分组转成 pdf 坐标矩形
 function selectionRectsBySlot() {
@@ -968,6 +981,8 @@ function onPointerDown(e) {
   }
   // 编辑中的文本框不响应绘制
   if (editing) return;
+  // 橡皮擦：单击删整条笔画，拖动擦除笔画局部
+  if (S.tool === 'erase') { e.preventDefault(); startErase(e, slot); return; }
   // 高亮工具点在文字上 → 交给原生文本选择
   if (S.tool === 'highlight' && e.target.tagName === 'SPAN' && e.target.closest('.textLayer')) return;
   e.preventDefault();
@@ -1046,14 +1061,45 @@ async function ensureEmbeddedFace(src, fontName) {
 // 每个折行点一个 run，同 x、基线逐行下移 1.25×字号——与导出 drawText 的 \n 行距、
 // 编辑态 div 的 line-height:1.25 一致，编辑态所见 = 导出所得
 const measureCtx = document.createElement('canvas').getContext('2d');
-function layoutWrapped(ann, text) {
+// 同栏宽度：从与本行左缘对齐的 span 起向右吸收相邻 span（间距 < 1.5×字号，
+// 两端对齐的词间空格不会断开，双栏的栏间距会断开）。段落末行/短行据此拿到
+// 整栏宽度，改长后不会按本行宽过早折行。ponytail: 1.5×字号阈值对栏间距极窄
+// （< 1.5em）的版式会误把两栏并成一栏，遇到再调
+function columnWrapWidth(slot, ann) {
+  const ir = pageEls[slot]?.querySelector('.page-inner')?.getBoundingClientRect();
+  if (!ir) return ann.x2 - ann.x1;
+  const left = ir.left + ann.x1 * S.scale;
+  let best = ann.x2 - ann.x1; // 退化：本行自身宽度（pdf 单位）
+  const rows = new Map(); // span → 行（top 相差 3px 内为一行）
+  for (const s of pageEls[slot].querySelectorAll('.textLayer span')) {
+    const r = s.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) continue;
+    const key = Math.round(r.top / 3);
+    (rows.get(key) || rows.set(key, []).get(key)).push(r);
+  }
+  for (const rects of rows.values()) {
+    rects.sort((a, b) => a.left - b.left);
+    let l = null, r = null;
+    for (const rc of rects) {
+      if (l === null) {
+        if (Math.abs(rc.left - left) < 5) { l = rc.left; r = rc.right; }
+        continue;
+      }
+      if (rc.left - r <= rc.height * 1.5) r = Math.max(r, rc.right);
+      else break;
+    }
+    if (l !== null) best = Math.max(best, (r - l) / S.scale);
+  }
+  return Math.max(10, best);
+}
+function layoutWrapped(ann, text, slot) {
   const r0 = ann.runs?.[0];
   const x = r0 ? r0.x : ann.rects[0][0];
   const baseY = r0 ? r0.baselineY
     : (ann.baselineY != null ? ann.baselineY : ann.rects[0][1] + (ann.rects[0][3] - ann.rects[0][1]) * 0.22);
   const size = (r0 ? r0.size : ann.size) || 12;
-  // 折行宽度 = 原行宽（不会压到右侧内容）；要按页宽折改这一行
-  const width = Math.max(10, ann.x2 - ann.x1);
+  // 折行宽度 = max(本行宽, 同栏宽)：短行改长优先吃本栏剩余空间，而不是立即折行
+  const width = columnWrapWidth(slot, ann);
   const fontName = r0?.fontName || ann.fontName || null;
   const css = runFaceCss(embeddedFaceCache.get(fontName) || null, ann.fontKey, text, size * S.scale).css;
   measureCtx.font = `${size}px ${css}`; // 与预览同字体栈测量；与导出字体度量或有微小差异，只影响断点位置
@@ -1063,7 +1109,7 @@ function layoutWrapped(ann, text) {
   // a.text 规范为逐行 join（自动折行点落成真实 \n）：编辑态 div（white-space:pre +
   // line-height:1.25）据此还原多行布局 = 所见即所得；重复提交幂等（text === lines.join）
   ann.text = lines.join('\n');
-  ann.wrapped = true;
+  ann.wrapped = lines.length > 1; // 只在真的产生折行时标记，单行重排仍是可 diff 的 run 结构
 }
 
 
@@ -1361,6 +1407,127 @@ function onDrawUp() {
   pushHistoryAdd([a]);
 }
 
+// ---------------- 橡皮擦（只作用于 ink 笔画）：拖动擦局部，单击删整笔 ----------------
+let erasing = null;
+function segDist(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy;
+  const t = L2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2)) : 0;
+  return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+}
+// 擦除带扫过笔画后剩下的连续段（每段≥2点）；未擦到任何线段返回 null
+function eraseRuns(points, path, th) {
+  const inBand = k => { // 第 k 段（points[k-1]→points[k]）是否被擦除带覆盖
+    const [x1, y1] = points[k - 1], [x2, y2] = points[k];
+    for (const p of [[x1, y1], [x2, y2], [(x1 + x2) / 2, (y1 + y2) / 2]])
+      for (let j = 1; j < path.length; j++)
+        if (segDist(p, path[j - 1], path[j]) <= th) return true;
+    return false;
+  };
+  const runs = [];
+  let cur = [points[0]];
+  for (let k = 1; k < points.length; k++) {
+    if (inBand(k)) { if (cur.length > 1) runs.push(cur); cur = [points[k]]; }
+    else cur.push(points[k]);
+  }
+  if (cur.length > 1) runs.push(cur);
+  return runs.length === 1 && runs[0].length === points.length ? null : runs;
+}
+// 就地擦除：被扫到的笔画替换为剩余段（拖动中实时反馈，无需 ghost）
+function applyErase(src, path) {
+  const list = S.anns.get(src);
+  if (!list) return false;
+  let changed = false;
+  const spliceAt = [];
+  list.forEach((a, idx) => {
+    if (a.type !== 'ink') return;
+    const runs = eraseRuns(a.points, path, (a.sw || 2.5) / 2 + 3);
+    if (!runs) return;
+    changed = true;
+    spliceAt.push([idx, runs.map(pts => ({ ...a, id: 'a' + annSeq++, points: pts }))]);
+  });
+  if (!changed) return false;
+  const out = [];
+  list.forEach((a, idx) => {
+    const sp = spliceAt.find(([i]) => i === idx);
+    if (sp) out.push(...sp[1]); else out.push(a);
+  });
+  if (S.selectedId && !out.some(a => a.id === S.selectedId)) S.selectedId = null;
+  S.anns.set(src, out);
+  renderAnnotationsBySrc(src);
+  return true;
+}
+// 拖动前后差集：removed=被擦掉的原件，created=擦出来的碎片（撤销/重做按这两组切换；只看 ink，
+// 否则页面上其它类型标注会被误当作擦除产物卷进撤销组）
+function eraseCollected(src, beforeRefs) {
+  const list = (S.anns.get(src) || []).filter(a => a.type === 'ink');
+  return {
+    removed: beforeRefs.filter(a => !list.includes(a)),
+    created: list.filter(a => !beforeRefs.includes(a)),
+  };
+}
+// 用 news 就地替换 list 中的 olds（其余顺序不变，news 插到第一个 old 的位置）
+function replaceAnns(src, olds, news) {
+  const list = S.anns.get(src);
+  if (!list) return;
+  const out = [];
+  let done = false;
+  for (const a of list) {
+    if (!olds.includes(a)) { out.push(a); continue; }
+    if (!done) { out.push(...news); done = true; }
+  }
+  if (S.selectedId && olds.some(a => a.id === S.selectedId)) S.selectedId = null;
+  S.anns.set(src, out);
+  renderAnnotationsBySrc(src);
+  updateAnnUI();
+}
+function startErase(e, slot) {
+  const p = pdfPointFromEvent(e, slot);
+  if (!p) return;
+  const src = S.pageOrder[slot]?.src;
+  erasing = { slot, src, down: e, path: [p], touched: false,
+    before: (S.anns.get(src) || []).filter(a => a.type === 'ink') };
+  window.addEventListener('pointermove', onEraseMove);
+  window.addEventListener('pointerup', onEraseUp, { once: true });
+  window.addEventListener('pointercancel', onEraseCancel, { once: true });
+}
+function onEraseMove(e) {
+  if (!erasing) return;
+  const p = pdfPointFromEvent(e, erasing.slot);
+  if (!p) return;
+  const lp = erasing.path[erasing.path.length - 1];
+  if (Math.hypot(p[0] - lp[0], p[1] - lp[1]) < 0.5) return;
+  erasing.path.push(p);
+  if (applyErase(erasing.src, erasing.path)) erasing.touched = true;
+}
+function onEraseCancel() {
+  window.removeEventListener('pointermove', onEraseMove);
+  const er = erasing; erasing = null;
+  if (er && er.touched) { // 中途打断：把已擦掉的还原，不进撤销栈
+    const { removed, created } = eraseCollected(er.src, er.before);
+    replaceAnns(er.src, created, removed);
+  }
+}
+function onEraseUp() {
+  window.removeEventListener('pointermove', onEraseMove);
+  const er = erasing; erasing = null;
+  if (!er) return;
+  if (!er.touched) { // 单击：删除光标下的整条笔画
+    const hit = hitAnnAt(er.down, er.slot);
+    const ann = hit && annOf(hit.dataset.annId);
+    if (ann && ann.type === 'ink') {
+      removeAnn(ann.id);
+      pushHistory({ undo() { readdAnns([ann]); }, redo() { removeAnn(ann.id); } });
+    }
+    return;
+  }
+  const { removed, created } = eraseCollected(er.src, er.before);
+  if (!removed.length) return;
+  pushHistory({
+    undo() { replaceAnns(er.src, created, removed); },
+    redo() { replaceAnns(er.src, removed, created); },
+  });
+}
+
 // 文本标注编辑（双击）
 viewer.addEventListener('dblclick', e => {
   const el = e.target.closest('.ann-text');
@@ -1424,7 +1591,7 @@ function startEditing(id, opts) {
         if (ann.wrapped || !ann.runs || !ann.runs.length || text.includes('\n') ||
             !alignRunsByDiff(ann, text) ||
             ann.runs.some(r => r.cur.trim().length > r.str.trim().length)) {
-          layoutWrapped(ann, text);
+          layoutWrapped(ann, text, slot);
         }
         if (text === ann.origText) {
           // 改回原文 = 撤销这次编辑（涂白无意义，移除标注）
@@ -1536,7 +1703,12 @@ function fitPage() {
   const d = S.slotDims.get(S.currentSlot);
   if (d) setScale(Math.min((viewer.clientWidth - 36) / d.w, (viewer.clientHeight - 52) / d.h), 'fitp');
 }
-$('#btnSidebar').addEventListener('click', () => $('#sidebar').classList.toggle('collapsed'));
+// 侧栏开合改变文档视口宽度：适应宽度/页面模式需重算
+$('#btnSidebar').addEventListener('click', () => {
+  $('#sidebar').classList.toggle('collapsed');
+  if (S.zoomMode === 'fitw') fitWidth();
+  else if (S.zoomMode === 'fitp') fitPage();
+});
 viewer.addEventListener('wheel', e => {
   if (!e.ctrlKey || !S.pdfDoc) return;
   e.preventDefault();
@@ -1796,6 +1968,7 @@ function updatePageUI() {
 
 // ---------------- 缩略图 ----------------
 let thumbsGen = 0;
+const THUMB_W = 156; // 卡片宽：侧栏 208 - 内边距/滚动条后恰好放下，不出横向滚动条
 async function buildThumbs() {
   const gen = ++thumbsGen; // 重入保护：快速连续旋转/删页时旧循环立即让位，避免缩略图重复
   const box = $('#tab-thumbs');
@@ -1809,7 +1982,7 @@ async function buildThumbs() {
     thumb.className = 'thumb loading';
     thumb.dataset.slot = i;
     thumb.draggable = true;
-    thumb.innerHTML = '<canvas width="160" height="226"></canvas><div class="pnum">' + (i + 1) + '</div>' +
+    thumb.innerHTML = '<canvas width="' + THUMB_W + '" height="220"></canvas><div class="pnum">' + (i + 1) + '</div>' +
       '<div class="tbtns"><button data-act="rl" title="左旋">↺</button><button data-act="rr" title="右旋">↻</button><button data-act="del" title="删除">✕</button></div>';
     box.appendChild(thumb);
     els.push(thumb);
@@ -1843,7 +2016,7 @@ async function buildThumbs() {
       const page = await S.pdfDoc.getPage(slotObj.src + 1);
       const rot = (page.rotate + slotObj.rot) % 360;
       const v1 = page.getViewport({ scale: 1, rotation: rot });
-      const ts = Math.min(160 / v1.width, 0.42);
+      const ts = Math.min(THUMB_W / v1.width, 0.42);
       const vp = page.getViewport({ scale: ts, rotation: rot });
       const c = els[i].querySelector('canvas');
       c.width = Math.floor(vp.width * DPR);

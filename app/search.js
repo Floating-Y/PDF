@@ -6,19 +6,20 @@ let searchState = { q: '', results: [], cur: -1 };
 let searchCase = false, searchHLAll = true;
 let searchDebounce = null;
 
-function showSearchPanel(show) { $('#searchPanel').hidden = !show; }
-// 点击搜索区外即收起浮层（面板在 .search-wrap 内，点面板按钮不受影响；捕获阶段立即收起）
-document.addEventListener('pointerdown', e => {
-  if (!e.target.closest('.search-wrap')) showSearchPanel(false);
-}, true);
+// 搜索头部（计数/上下导航/选项）常驻侧栏「搜索」页签，随搜索状态显隐
+function showSearchPanel(show) { $('#searchHead').hidden = !show; }
 function updateSearchCount() {
   $('#searchCount').textContent = (searchState.cur + 1) + '/' + searchState.results.length;
 }
+// 打开新文档时重置结果面板（app.js 调用；输入框由调用方清空）
+function resetResultsPanel() {
+  updateSearchCount(); showSearchPanel(false);
+  $('#resultList').innerHTML = '<div class="muted pad">输入关键词后回车搜索</div>';
+}
 function clearSearch(clearInput = true) {
   searchState = { q: '', results: [], cur: -1 };
-  if (clearInput) { $('#searchBox').value = ''; showSearchPanel(false); }
-  updateSearchCount();
-  $('#tab-results').innerHTML = '<div class="muted pad">输入关键词后回车搜索</div>';
+  if (clearInput) $('#searchBox').value = '';
+  resetResultsPanel();
   for (const slot of [...S.views.keys()]) renderAnnotations(slot);
 }
 
@@ -36,10 +37,10 @@ $('#searchBox').addEventListener('keydown', e => {
   if (e.key === 'Enter') doSearch($('#searchBox').value.trim(), e.shiftKey ? -1 : 1);
   else if (e.key === 'Escape') { e.target.blur(); clearSearch(); }
 });
-$('#searchPanel').addEventListener('click', e => {
-  const b = e.target.closest('button[data-snav]');
+$('#searchHead').addEventListener('click', e => {
+  const b = e.target.closest('button[data-rnav]');
   if (b && searchState.results.length) {
-    gotoSearchResult((searchState.cur + +b.dataset.snav + searchState.results.length) % searchState.results.length);
+    gotoSearchResult((searchState.cur + +b.dataset.rnav + searchState.results.length) % searchState.results.length);
   }
 });
 $('#searchCase').addEventListener('change', e => { searchCase = e.target.checked; if (searchState.q) doSearch(searchState.q); });
@@ -49,7 +50,7 @@ $('#searchHl').addEventListener('change', e => {
 });
 
 async function doSearch(q, step) {
-  const box = $('#tab-results');
+  const box = $('#resultList');
   if (!q || !S.pdfDoc) return;
   // 同一关键词再次回车 → 跳下一处（Shift+Enter 上一处），不重新全文扫描
   if (step && searchState.q === q && searchState.results.length) {
@@ -61,6 +62,7 @@ async function doSearch(q, step) {
   if (searching) { searchQueued = { q, step: step || 0 }; return; }
   searching = true;
   showSearchPanel(true);
+  switchTab('results'); // 结果在侧栏页签里，搜索时切过去让用户看得见
   try {
     box.innerHTML = '<div class="muted pad">搜索中…</div>';
     const ql = searchCase ? q : q.toLowerCase();
@@ -107,23 +109,12 @@ function matchRect(parts, idx, len) {
 }
 
 function renderResults() {
-  const box = $('#tab-results');
+  const box = $('#resultList');
   box.textContent = '';
   if (!searchState.results.length) {
     box.innerHTML = '<div class="muted pad">未找到「' + esc(searchState.q) + '」</div>';
     return;
   }
-  const head = document.createElement('div');
-  head.className = 'rhead';
-  head.innerHTML = '<span class="muted">' + searchState.results.length + ' 个结果</span>' +
-    '<span class="rnav"><button data-rnav="-1" title="上一处（Shift+Enter）">\u2039</button>' +
-    '<span class="rpos"></span>' +
-    '<button data-rnav="1" title="下一处（Enter）">\u203a</button></span>';
-  head.addEventListener('click', e => {
-    const b = e.target.closest('button[data-rnav]');
-    if (b) gotoSearchResult((searchState.cur + +b.dataset.rnav + searchState.results.length) % searchState.results.length);
-  });
-  box.appendChild(head);
   for (const [i, r] of searchState.results.entries()) {
     const div = document.createElement('div');
     div.className = 'ritem';
@@ -144,11 +135,9 @@ function gotoSearchResult(i) {
   const slot = S.pageOrder.findIndex(s => s.src === r.src);
   if (slot < 0) { toast('该页已被删除'); return; }
   jumpToSlot(slot);
-  const items = $$('#tab-results .ritem');
+  const items = $$('#resultList .ritem');
   items.forEach((el, k) => el.classList.toggle('current', k === i));
   if (items[i]) items[i].scrollIntoView({ block: 'nearest' });
-  const pos = $('#tab-results .rpos');
-  if (pos) pos.textContent = (i + 1) + '/' + searchState.results.length;
   updateSearchCount();
   showSearchPanel(true);
   // 全部高亮模式下"当前命中"深色标记随导航移动：重绘可见页

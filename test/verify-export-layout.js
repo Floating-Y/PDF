@@ -32,7 +32,13 @@ const context = {
   PDFLib, FONT_MAP, alignRunsByDiff, wrapLine, runFaceCss,
   $: () => ({ addEventListener() {} }),
   S: { views: new Map([[0, {}]]), scale: 1 },
-  pageEls: [{ querySelector: () => element }],
+  // page-inner 桩：columnWrapWidth 拿不到文字层 span（querySelectorAll 空）时退化为本行宽
+  pageEls: [{
+    querySelector: sel => sel === '.page-inner'
+      ? { getBoundingClientRect: () => ({ left: 0, top: 0 }) }
+      : element,
+    querySelectorAll: () => [],
+  }],
   annSlotOf: () => 0, annOf: () => currentAnn,
   renderAnnotations() {}, pushHistory() {}, removeAnn() { currentAnn = null; },
   window: { getSelection: () => ({ removeAllRanges() {}, addRange() {} }) },
@@ -43,7 +49,7 @@ const context = {
 // app.js 的顶层装配需要完整浏览器；只加载这两个真实函数，不能复刻提交规则。
 const source = fs.readFileSync(path.join(ROOT, 'app/app.js'), 'utf8');
 vm.runInNewContext(
-  source.slice(source.indexOf('function layoutWrapped('), source.indexOf('\nasync function startLineEdit(')) + '\n' +
+  source.slice(source.indexOf('function columnWrapWidth('), source.indexOf('\nasync function startLineEdit(')) + '\n' +
   source.slice(source.indexOf('function startEditing('), source.indexOf('\n// 删除标注')),
   context,
 );
@@ -87,7 +93,7 @@ function checkEdit(text, wrapped) {
       assert.strictEqual(run.x, 50);
       assert.strictEqual(run.baselineY, 688 - index * 12 * 1.25);
     });
-  } else {
+  } else if (text.trim()) {
     assert.strictEqual(currentAnn.runs.length, xs.length, '等长修改应保留原始 run');
   }
   return currentAnn;
@@ -97,7 +103,7 @@ const longer = checkEdit(origText.replace('reuse', 'reusable'), true);
 assert(longer.runs.length > 1, '变长后应按原行宽折行');
 checkEdit(origText.replace('font', 'fond'), false);
 checkEdit(origText.replace('reuse ', 'reuse\n'), true);
-const deleted = checkEdit('', true);
+const deleted = checkEdit('', false); // 清空 = 单个空 run，未折行
 assert.strictEqual(drawnText(deleted).length, 0, '清空文字仅涂白，不应绘制文字');
 
 const subset = fontkit.create(new Uint8Array(Buffer.from(
