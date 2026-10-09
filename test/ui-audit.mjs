@@ -2,8 +2,9 @@
 // 用法：带 --remote-debugging-port=9222 启动 pdfpro.exe，然后 node test/ui-audit.mjs
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
+import assert from 'node:assert/strict';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..').replace(/\\/g, '/');
-const BASE = 'http://127.0.0.1:9222';
+const BASE = process.env.CDP_BASE || 'http://127.0.0.1:9222';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const wsUrl = (await (await fetch(BASE + '/json')).json())
@@ -25,20 +26,30 @@ const evalp = async expr => {
   return r.result?.result?.value;
 };
 
-await evalp(`openPath('${ROOT}/test/sample.pdf')`);
+const dataPath = await evalp('window.__TAURI__.path.appLocalDataDir()');
+assert(dataPath.replace(/\\/g, '/').toLowerCase().startsWith(ROOT.toLowerCase() + '/src-tauri/target/'),
+  '请使用 test/tauri-e2e.json 构建隔离实例，避免修改日常偏好');
+await evalp(`setReading(false); setSimple(true); updateToolbarPreferences(['search', 'export']);
+  if (!document.getElementById('sidebar').classList.contains('collapsed')) toggleSidebar();
+  openPath('${ROOT}/test/sample.pdf')`);
 await sleep(2500);
 
 const report = async label => {
   const r = await evalp(`(() => {
     const tb = document.getElementById('toolbar');
-    const rows = [...new Set([...tb.children].map(c => c.offsetTop))];
+    const groups = [...tb.querySelectorAll(':scope > .tb-group')].filter(c => c.getBoundingClientRect().width > 0);
+    const rows = [...new Set(groups.map(c => {
+      const rect = c.getBoundingClientRect();
+      return Math.round(rect.top + rect.height / 2);
+    }))];
     const wc = document.getElementById('winControls').getBoundingClientRect();
-    const overflow = [...tb.children].filter(c => c.offsetLeft + c.offsetWidth > wc.left + 2 && c.offsetTop === rows[0] && c.id !== 'winControls');
+    const overflow = groups.filter(c => c.getBoundingClientRect().right > wc.left + 2);
     return { label: ${JSON.stringify(label)}, tbWidth: tb.clientWidth, rows: rows.length,
       wc: { top: Math.round(wc.top), right: Math.round(wc.right), left: Math.round(wc.left) },
       winW: innerWidth, underControls: overflow.map(c => c.id || c.className) };
   })()`);
   console.log(JSON.stringify(r));
+  assert.equal(r.underControls.length, 0, label + ' 的工具不能盖住窗口按钮');
   return r;
 };
 
@@ -50,18 +61,19 @@ const at900 = await report('900（最小宽度）');
 await send('Emulation.clearDeviceMetricsOverride');
 await sleep(300);
 
-console.log('--- 命中区与搜索面板 ---');
+console.log('--- 命中区与搜索侧栏 ---');
+await evalp(`focusSearch(); document.getElementById('searchBox').value = 'fox'; doSearch('fox')`);
 const hits = await evalp(`(() => {
   const t = s => { const r = document.querySelector(s)?.getBoundingClientRect(); return r ? { w: Math.round(r.width), h: Math.round(r.height) } : null; };
-  const sb = document.getElementById('searchBox');
-  sb.focus(); sb.value = 'test';
-  const panel = document.getElementById('searchPanel'); panel.hidden = false;
-  const pr = panel.getBoundingClientRect(), wr = document.querySelector('.search-wrap').getBoundingClientRect();
+  const panel = document.getElementById('searchHead');
+  const pr = panel.getBoundingClientRect();
   const wcr = document.getElementById('winControls').getBoundingClientRect();
   return { winBtns: t('#winMin'), 工具栏按钮: t('#btnOpen'), zoomMenu: t('#btnZoomMenu'),
-    搜索面板: { top: Math.round(pr.top), bottom: Math.round(pr.bottom), 与winControls重叠: pr.right > wcr.left && pr.top < wcr.bottom } };
+    搜索侧栏: { visible: !document.getElementById('sidebar').classList.contains('collapsed') && !panel.hidden,
+      top: Math.round(pr.top), bottom: Math.round(pr.bottom), 与winControls重叠: pr.right > wcr.left && pr.top < wcr.bottom } };
 })()`);
 console.log(JSON.stringify(hits));
+assert(hits.搜索侧栏.visible && !hits.搜索侧栏.与winControls重叠, '搜索结果必须可见且避开窗口按钮');
 
 console.log('--- 对比度（WCAG，正文需 4.5:1，大字/图形 3:1）---');
 const contrast = await evalp(`(() => {

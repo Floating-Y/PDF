@@ -65,6 +65,7 @@
     <div class="tb-spacer" data-tauri-drag-region></div>
 
     <div class="tb-group">
+      <div id="toolFavorites" class="tb-group" aria-label="常用工具"></div>
       <div class="search-wrap">
         <svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.3"/><path d="m10.3 10.3 3.2 3.2"/></svg>
         <input id="searchBox" type="search" placeholder="搜索全文…" title="搜索全文（Ctrl+F）；命中与选项见左侧「搜索」页签" disabled>
@@ -76,8 +77,9 @@
         <svg class="ic-sun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3.2"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.5 3.5l1.1 1.1M11.4 11.4l1.1 1.1M12.5 3.5l-1.1 1.1M4.6 11.4l-1.1 1.1"/></svg>
         <svg class="ic-moon" viewBox="0 0 16 16"><path d="M13.2 9.7A5.8 5.8 0 1 1 6.3 2.8a4.6 4.6 0 0 0 6.9 6.9z"/></svg>
       </button>
-      <button id="btnMore" title="页面操作与更多" aria-label="页面操作与更多" disabled>
+      <button id="btnMore" title="更多工具" aria-label="更多工具" class="btn-labeled">
         <svg viewBox="0 0 16 16"><g fill="currentColor" stroke="none"><circle cx="3.5" cy="8" r="1.3"/><circle cx="8" cy="8" r="1.3"/><circle cx="12.5" cy="8" r="1.3"/></g></svg>
+        <span>更多</span>
       </button>
     </div>
 
@@ -152,10 +154,14 @@
     </div>
     <div class="tb-spacer" data-tauri-drag-region></div>
   </div>
+  <div id="toolContext" hidden aria-label="当前工具">
+    <span id="currentTool" role="status" aria-live="polite"></span>
+    <button id="btnExitTool" title="返回选择工具并取消标注选择（Esc）">退出工具 · Esc</button>
+  </div>
   </div><!-- /topbars -->
 
   <div id="main">
-    <aside id="sidebar">
+    <aside id="sidebar" class="collapsed">
       <div class="side-tabs">
         <button data-tab="thumbs" class="active">页面</button>
         <button data-tab="outline">目录</button>
@@ -238,6 +244,7 @@
       <span>撤销 / 重做</span><kbd>Ctrl+Z / Ctrl+Y</kbd>
       <span>手型工具 / 回到选择工具</span><kbd>H / Esc</kbd>
       <span>阅读模式（隐藏/唤出工具栏）</span><kbd>F8</kbd>
+      <span>简洁 / 完整工具栏</span><kbd>F9</kbd>
       <span>临时手型平移（按住拖动）</span><kbd>Space</kbd>
       <span>框选区域放大</span><kbd>Ctrl+拖拽</kbd>
       <span>保存（桌面版写回原文件）</span><kbd>Ctrl+S</kbd>
@@ -247,6 +254,16 @@
       <span>本帮助</span><kbd>F1</kbd>
     </div>
     <button id="btnHelpClose">关闭</button>
+  </dialog>
+
+  <dialog id="toolbarCustomize" aria-labelledby="toolbarCustomizeTitle">
+    <h2 id="toolbarCustomizeTitle">自定义常用工具</h2>
+    <p class="muted">勾选后显示在简洁工具栏，建议保留 2–4 项。</p>
+    <fieldset id="toolbarChoices"><legend>常驻工具</legend></fieldset>
+    <form method="dialog" class="customize-actions">
+      <button id="btnToolbarDefault" type="button">恢复默认</button>
+      <button value="close">完成</button>
+    </form>
   </dialog>
 
   <input type="file" id="fileInput" accept="application/pdf,.pdf" hidden>

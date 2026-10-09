@@ -26,6 +26,12 @@ keep the first backup. The browser server listens only on `127.0.0.1`.
 
 ## Usage
 
+- **Toolbar** — the default compact view keeps the basic controls, search and
+  export visible. Open "⋯ → Customize common tools" to choose your own shortcuts;
+  changes are remembered locally and can be reset. The other tools are grouped
+  under "⋯". Active annotation tools show their color controls and an exit button.
+  F9 toggles the full toolbar; Ctrl+F also opens search when its shortcut is hidden.
+  The sidebar starts collapsed and opens when you search.
 - **Read** — open via the button or drag a PDF in. Continuous scrolling, zoom
   (Ctrl+wheel anchored at the cursor / preset dropdown / fit-width / fit-page /
   Ctrl+drag to zoom into a region), a hand tool for drag-panning (H, or hold
@@ -41,8 +47,9 @@ keep the first backup. The browser server listens only on `127.0.0.1`.
   itself (rotate / delete / print).
 - **Edit text** — the "✏️ Edit text" tool rewrites a clicked line in place, reusing
   the PDF's own embedded font so the result is indistinguishable from the original.
-- **Pages** — rotate, delete, and reorder pages via the "⋯" menu or the thumbnail
-  sidebar (takes effect on export).
+- **Pages** — rotate or delete pages via "⋯ → Page actions"; reorder them in the
+  thumbnail sidebar, opened from "⋯ → Reading & interface → Pages & outline"
+  (takes effect on export).
 - **Export** — "💾 Export" saves a new PDF with all changes baked in; the original
   file is untouched. Unsaved changes are guarded (orange dot + close confirmation),
   and editing sessions autosave to IndexedDB — after a crash, the start page offers

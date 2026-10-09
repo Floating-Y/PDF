@@ -35,7 +35,10 @@ $('#searchBox').addEventListener('focus', () => {
 });
 $('#searchBox').addEventListener('keydown', e => {
   if (e.key === 'Enter') doSearch($('#searchBox').value.trim(), e.shiftKey ? -1 : 1);
-  else if (e.key === 'Escape') { e.target.blur(); clearSearch(); }
+  else if (e.key === 'Escape') {
+    e.target.blur(); clearSearch();
+    $('.search-wrap').classList.remove('search-open');
+  }
 });
 $('#searchHead').addEventListener('click', e => {
   const b = e.target.closest('button[data-rnav]');
@@ -62,6 +65,7 @@ async function doSearch(q, step) {
   if (searching) { searchQueued = { q, step: step || 0 }; return; }
   searching = true;
   showSearchPanel(true);
+  if ($('#sidebar').classList.contains('collapsed')) toggleSidebar();
   switchTab('results'); // 结果在侧栏页签里，搜索时切过去让用户看得见
   try {
     box.innerHTML = '<div class="muted pad">搜索中…</div>';

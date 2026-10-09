@@ -85,9 +85,16 @@ function hasDocumentChanges() {
 function markDirty() {
   dirty = hasDocumentChanges();
   $('#btnSave').classList.toggle('dirty', dirty);
+  document.body.classList.toggle('has-changes', dirty);
+  $('#btnMore').setAttribute('aria-label', dirty ? '更多工具（有未导出的修改）' : '更多工具');
   scheduleSessionSave(); // 修改即存 IndexedDB（防抖），崩溃 / 误关后可恢复
 }
-function clearDirty() { dirty = false; $('#btnSave').classList.remove('dirty'); }
+function clearDirty() {
+  dirty = false;
+  $('#btnSave').classList.remove('dirty');
+  document.body.classList.remove('has-changes');
+  $('#btnMore').setAttribute('aria-label', '更多工具');
+}
 // 撤销 / 删除可能回到"无任何实质修改"（判定规则与 saveSession 一致）：此时清除未导出标记
 function refreshDirty() {
   if (!S.pdfDoc) return;
@@ -253,7 +260,7 @@ async function openFile(file, handle = null, handleItem = null, savedReload = fa
 }
 
 function enableToolbar() {
-  $$('#toolbar button, #toolbar input, #subbar button, #subbar input').forEach(b => { b.disabled = false; });
+  $$('#topbars button, #topbars input').forEach(b => { b.disabled = false; });
   updateAnnUI();
   updateUndoUI();
 }
@@ -261,6 +268,7 @@ function enableToolbar() {
 // 删标注按钮的可用状态跟随"是否有选中标注"，而不是一直可点
 function updateAnnUI() {
   $('#btnDeleteAnn').disabled = !S.pdfDoc || !S.selectedId;
+  $('#btnDeleteAnn').hidden = simpleMode && !S.selectedId;
   updateStyleGroup();
 }
 
@@ -269,6 +277,9 @@ function updateAnnUI() {
 const COLOR_TOOLS = new Set(['highlight', 'rect', 'ink', 'text']);
 function updateStyleGroup() {
   $('#colorGroup').hidden = !(COLOR_TOOLS.has(S.tool) || (S.tool === 'select' && S.selectedId));
+  $('#toolContext').hidden = !simpleMode || !S.pdfDoc || (S.tool === 'select' && !S.selectedId);
+  const tool = toolbarTools.find(item => item.element.dataset.tool === S.tool);
+  $('#currentTool').textContent = S.tool === 'select' ? '已选中标注' : '当前：' + tool.label;
 }
 
 // ---------------- 撤销 / 重做 ----------------
@@ -657,19 +668,27 @@ function renderAnnotationsBySrc(src) {
 }
 
 // ---------------- 工具与交互 ----------------
-// data-tool 按钮分布在第二层的两组分段里（viewTools / toolGroup），监听整个工具条
-$('#subbar').addEventListener('click', e => {
+// 常用区移动原按钮，沿用高亮/改字的选区处理与已有点击监听。
+$('#topbars').addEventListener('click', e => {
   const btn = e.target.closest('button[data-tool]');
   if (!btn || btn.disabled) return;
   setTool(btn.dataset.tool);
 });
 function setTool(t) {
   S.tool = t;
-  $$('#subbar button[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === t));
+  $$('#topbars button[data-tool]').forEach(b => {
+    b.classList.toggle('active', b.dataset.tool === t);
+    b.setAttribute('aria-pressed', String(b.dataset.tool === t));
+  });
   viewer.dataset.tool = t;
   updateStyleGroup();
   hideSelBar();
 }
+$('#btnExitTool').addEventListener('click', () => {
+  selectAnn(null);
+  setTool('select');
+  viewer.focus();
+});
 $('#colorGroup').addEventListener('click', e => {
   const btn = e.target.closest('.color-dot');
   if (!btn) return;
@@ -1704,11 +1723,12 @@ function fitPage() {
   if (d) setScale(Math.min((viewer.clientWidth - 36) / d.w, (viewer.clientHeight - 52) / d.h), 'fitp');
 }
 // 侧栏开合改变文档视口宽度：适应宽度/页面模式需重算
-$('#btnSidebar').addEventListener('click', () => {
+function toggleSidebar() {
   $('#sidebar').classList.toggle('collapsed');
   if (S.zoomMode === 'fitw') fitWidth();
   else if (S.zoomMode === 'fitp') fitPage();
-});
+}
+$('#btnSidebar').addEventListener('click', toggleSidebar);
 viewer.addEventListener('wheel', e => {
   if (!e.ctrlKey || !S.pdfDoc) return;
   e.preventDefault();
@@ -1764,23 +1784,28 @@ function applyZoomPref(v) {
 
 // ---------------- 下拉菜单（缩放档位 / 页面操作） ----------------
 let menuEl = null;
+let menuAnchor = null;
 function closeMenu() {
   if (menuEl) {
     menuEl.remove();
     menuEl = null;
     document.removeEventListener('pointerdown', onMenuOutside, true);
   }
+  $('#btnMore').setAttribute('aria-expanded', 'false');
 }
 function onMenuOutside(e) { if (menuEl && !menuEl.contains(e.target)) closeMenu(); }
 function openMenu(anchor, items) {
   closeMenu();
   const m = document.createElement('div');
   m.className = 'menu';
+  // 点击菜单动作时保留页面文字选区，供高亮与改字继续使用。
+  m.addEventListener('mousedown', e => { if (e.target.closest('button')) e.preventDefault(); });
   for (const it of items) {
     if (it === 'sep') { const s = document.createElement('div'); s.className = 'menu-sep'; m.appendChild(s); continue; }
     const b = document.createElement('button');
     if (it.danger) b.classList.add('danger');
     if (it.checked) b.classList.add('on');
+    b.disabled = !!it.disabled;
     // 色点项（改色）：圆点代替勾选位；普通项占位勾（选中可见）
     b.innerHTML = it.swatch
       ? `<span class="mdot" style="background:${it.swatch}"></span>` + esc(it.label)
@@ -1799,6 +1824,9 @@ function openMenu(anchor, items) {
   m.style.top = Math.max(8, Math.min(top, window.innerHeight - h - 8)) + 'px';
   m.style.left = Math.max(8, Math.min(left, window.innerWidth - w - 8)) + 'px';
   menuEl = m;
+  menuAnchor = anchor instanceof Element ? anchor : null;
+  $('#btnMore').setAttribute('aria-expanded', String(anchor === $('#btnMore')));
+  m.querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
   setTimeout(() => document.addEventListener('pointerdown', onMenuOutside, true), 0);
 }
 $('#btnZoomMenu').addEventListener('click', () => {
@@ -1813,18 +1841,47 @@ $('#btnZoomMenu').addEventListener('click', () => {
     { label: '适应页面', checked: S.zoomMode === 'fitp', onClick: fitPage },
   ]);
 });
-$('#btnMore').addEventListener('click', () => {
-  openMenu($('#btnMore'), [
-    { label: '向左旋转当前页', onClick: () => rotateCurrent(-90) },
-    { label: '向右旋转当前页', onClick: () => rotateCurrent(90) },
-    'sep',
-    { label: '删除当前页…', danger: true, onClick: () => deletePageAt(S.currentSlot) },
-    'sep',
-    ...(TAURI ? [{ label: '保存（写回原文件，Ctrl+S）', onClick: saveInPlace }] : []),
-    { label: '打印…', onClick: printPdf },
-    { label: '快捷键说明', onClick: () => $('#shortcutHelp').showModal() },
-  ]);
-});
+// 顶层只保留分组与界面入口，隐藏的工具在分组中始终可达。
+function openMoreMenu(section = null) {
+  let items;
+  if (!section) {
+    items = [
+      ...[['annotation', '标注与改字'], ['pages', '页面操作'], ['reading', '阅读与界面'], ['file', '文件与历史']]
+        .map(([id, label]) => ({ label: label + ' ›', onClick: () => openMoreMenu(id) })),
+      'sep',
+      { label: '自定义常用工具…', onClick: showToolbarCustomization },
+      { label: simpleMode ? '完整工具栏（F9）' : '简洁模式（F9）', onClick: () => setSimple(!simpleMode) },
+      { label: '快捷键说明', onClick: () => $('#shortcutHelp').showModal() },
+    ];
+  } else if (section === 'pages') {
+    items = [
+      { label: '页面与目录侧栏', disabled: !S.pdfDoc, onClick: () => { switchTab('thumbs'); if ($('#sidebar').classList.contains('collapsed')) toggleSidebar(); } },
+      { label: '向左旋转当前页', disabled: !S.pdfDoc, onClick: () => rotateCurrent(-90) },
+      { label: '向右旋转当前页', disabled: !S.pdfDoc, onClick: () => rotateCurrent(90) },
+      { label: '删除当前页…', disabled: !S.pdfDoc, danger: true, onClick: () => deletePageAt(S.currentSlot) },
+      { label: '打印…', disabled: !S.pdfDoc, onClick: printPdf },
+    ];
+  } else {
+    items = toolbarTools.filter(tool => tool.group === section).map(tool => ({
+      label: tool.label,
+      disabled: tool.id === 'search' ? $('#searchBox').disabled : tool.element.disabled,
+      checked: tool.element.dataset.tool ? S.tool === tool.element.dataset.tool : tool.element.classList.contains('active'),
+      onClick: () => { if (tool.id === 'search') focusSearch(); else tool.element.click(); },
+    }));
+    if (section === 'annotation') {
+      items.push({ label: '选择/移动（V）', checked: S.tool === 'select', disabled: !S.pdfDoc, onClick: () => setTool('select') },
+        { label: '删除选中标注（Del）', disabled: $('#btnDeleteAnn').disabled, onClick: deleteSelected });
+    } else if (section === 'reading') {
+      items.find(item => item.label === '页面与目录').checked = !$('#sidebar').classList.contains('collapsed');
+    } else if (section === 'file' && TAURI) {
+      items.unshift({ label: '保存（写回原文件，Ctrl+S）', disabled: $('#btnSave').disabled, onClick: saveInPlace });
+    }
+  }
+  if (section) items.unshift({ label: '‹ 返回更多', onClick: () => openMoreMenu() }, 'sep');
+  openMenu($('#btnMore'), items);
+}
+$('#btnMore').addEventListener('mousedown', e => e.preventDefault());
+$('#btnMore').addEventListener('click', () => openMoreMenu());
 $('#btnHelpClose').addEventListener('click', () => $('#shortcutHelp').close());
 
 // ---------------- 右键上下文菜单（商业阅读器标配：标注 / 选区 / 页面三套） ----------------
@@ -2119,7 +2176,9 @@ function setReading(on) {
 setReading(readingMode);
 $('#btnReading').addEventListener('click', () => setReading(!readingMode));
 $('#revealZone').addEventListener('mouseenter', () => document.body.classList.add('reveal'));
-$('#topbars').addEventListener('mouseleave', () => document.body.classList.remove('reveal'));
+$('#topbars').addEventListener('mouseleave', () => {
+  if (!menuEl && !$('#toolbarCustomize').open) document.body.classList.remove('reveal');
+});
 $('#pagePill').addEventListener('click', () => { document.body.classList.add('reveal'); $('#pageInput').focus(); });
 let lastScrollTop = 0;
 viewer.addEventListener('scroll', () => {
@@ -2129,13 +2188,116 @@ viewer.addEventListener('scroll', () => {
   document.body.classList.toggle('reveal', dy < 0); // 上滚唤出，下滚收起
 });
 
+// ---------------- 简洁模式（默认，F9 / 更多菜单切换） ----------------
+// 使用原按钮与位置标记切换布局，避免复制按钮后丢失选区处理或禁用状态。
+let simpleMode = true;
+try { simpleMode = localStorage.getItem('pdf-simple') !== '0'; } catch (e) {}
+const toolbarTools = [
+  ['search', '搜索', '.search-wrap', 'reading'],
+  ['export', '导出', '#btnSave', 'file'],
+  ['highlight', '高亮', 'button[data-tool="highlight"]', 'annotation'],
+  ['ink', '画笔', 'button[data-tool="ink"]', 'annotation'],
+  ['edittext', '编辑原文', 'button[data-tool="edittext"]', 'annotation'],
+  ['replace', '替换选中文字…', '#btnEditText', 'annotation'],
+  ['text', '添加文字', 'button[data-tool="text"]', 'annotation'],
+  ['rect', '方框', 'button[data-tool="rect"]', 'annotation'],
+  ['erase', '橡皮擦', 'button[data-tool="erase"]', 'annotation'],
+  ['hand', '手型（H）', 'button[data-tool="hand"]', 'reading'],
+  ['undo', '撤销（Ctrl+Z）', '#btnUndo', 'file'],
+  ['redo', '重做（Ctrl+Y）', '#btnRedo', 'file'],
+  ['sidebar', '页面与目录', '#btnSidebar', 'reading'],
+  ['reading', '阅读模式（F8）', '#btnReading', 'reading'],
+  ['theme', '切换深色 / 浅色主题', '#btnTheme', 'reading'],
+].map(([id, label, selector, group]) => {
+  const element = $(selector);
+  const home = document.createComment(id);
+  element.before(home);
+  if (id !== 'search' && id !== 'export') {
+    const text = document.createElement('span');
+    text.className = 'tool-label';
+    text.textContent = label;
+    element.appendChild(text);
+  }
+  return { id, label, group, element, home };
+});
+const colorHome = document.createComment('colors');
+$('#colorGroup').before(colorHome);
+const deleteHome = document.createComment('delete-annotation');
+$('#btnDeleteAnn').before(deleteHome);
+const DEFAULT_TOOLBAR_TOOLS = ['search', 'export'];
+let toolbarPrefs = [...DEFAULT_TOOLBAR_TOOLS];
+try {
+  const saved = JSON.parse(localStorage.getItem('pdf-toolbar-tools'));
+  if (Array.isArray(saved)) {
+    const known = toolbarTools.filter(tool => saved.includes(tool.id)).map(tool => tool.id);
+    if (!saved.length || known.length) toolbarPrefs = known;
+  }
+} catch (e) { /* 损坏或不可用的本机偏好回退默认值。 */ }
+function applyToolbarLayout() {
+  for (const tool of toolbarTools) {
+    const pinned = toolbarPrefs.includes(tool.id);
+    tool.element.classList.toggle('toolbar-hidden', !pinned);
+    if (tool.id === 'search' || tool.id === 'export') continue;
+    if (simpleMode && pinned) $('#toolFavorites').appendChild(tool.element);
+    else tool.home.after(tool.element);
+  }
+  if (simpleMode) {
+    $('#btnExitTool').before($('#colorGroup'), $('#btnDeleteAnn'));
+  } else {
+    colorHome.after($('#colorGroup'));
+    deleteHome.after($('#btnDeleteAnn'));
+  }
+  updateAnnUI();
+}
+function updateToolbarPreferences(ids) {
+  toolbarPrefs = toolbarTools.filter(tool => ids.includes(tool.id)).map(tool => tool.id);
+  try { localStorage.setItem('pdf-toolbar-tools', JSON.stringify(toolbarPrefs)); }
+  catch (e) { toast('无法记住工具栏设置，本次窗口内仍生效'); }
+  applyToolbarLayout();
+  $$('#toolbarChoices input').forEach(input => { input.checked = toolbarPrefs.includes(input.value); });
+}
+function showToolbarCustomization() {
+  closeMenu();
+  $$('#toolbarChoices input').forEach(input => { input.checked = toolbarPrefs.includes(input.value); });
+  $('#toolbarCustomize').showModal();
+}
+for (const tool of toolbarTools) {
+  const label = document.createElement('label');
+  const input = document.createElement('input');
+  input.type = 'checkbox'; input.value = tool.id;
+  label.append(input, document.createTextNode(tool.label));
+  $('#toolbarChoices').appendChild(label);
+}
+$('#toolbarChoices').addEventListener('change', () => {
+  updateToolbarPreferences($$('#toolbarChoices input:checked').map(input => input.value));
+});
+$('#btnToolbarDefault').addEventListener('click', () => updateToolbarPreferences(DEFAULT_TOOLBAR_TOOLS));
+$('#toolbarCustomize').addEventListener('close', () => $('#btnMore').focus());
+function setSimple(on) {
+  simpleMode = on;
+  document.body.classList.toggle('simple', on);
+  $('.search-wrap').classList.remove('search-open');
+  applyToolbarLayout();
+  try { localStorage.setItem('pdf-simple', on ? '1' : '0'); } catch (e) {}
+}
+setSimple(simpleMode);
+function focusSearch() {
+  const box = $('#searchBox');
+  if (box.disabled) return;
+  $('.search-wrap').classList.add('search-open');
+  if (readingMode) document.body.classList.add('reveal');
+  box.focus(); box.select();
+}
+$('.search-wrap').addEventListener('focusout', () => {
+  if (!$('#searchBox').value) $('.search-wrap').classList.remove('search-open');
+});
+
 // ---------------- 键盘 ----------------
 document.addEventListener('keydown', e => {
   if (savingPdf) { e.preventDefault(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
     e.preventDefault();
-    const sb = $('#searchBox');
-    if (!sb.disabled) { sb.focus(); sb.select(); }
+    focusSearch();
     return;
   }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
@@ -2148,11 +2310,12 @@ document.addEventListener('keydown', e => {
     if (S.pdfDoc) { if (TAURI) saveInPlace(); else exportPdf(); }
     return;
   }
+  if (e.key === 'F9') { e.preventDefault(); setSimple(!simpleMode); return; }
+  if (e.key === 'Escape' && menuEl) { closeMenu(); menuAnchor?.focus(); return; }
   const t = e.target;
   if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return;
   if (e.key === 'F1') { e.preventDefault(); $('#shortcutHelp').showModal(); return; }
   if (e.key === 'F8') { e.preventDefault(); setReading(!readingMode); return; }
-  if (e.key === 'Escape' && menuEl) { closeMenu(); return; }
   // 空格按住 = 临时手型（默认的空格滚动让位给拖动平移）
   if (e.key === ' ' && S.pdfDoc) {
     e.preventDefault();
@@ -2185,11 +2348,12 @@ document.addEventListener('keydown', e => {
 // 初始（主题：记忆值优先，否则跟随系统深浅色）
 document.documentElement.dataset.theme = localStorage.getItem('pdf-theme') ||
   (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-$('#btnTheme').addEventListener('click', () => {
+function toggleTheme() {
   const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
   document.documentElement.dataset.theme = next;
   localStorage.setItem('pdf-theme', next);
-});
+}
+$('#btnTheme').addEventListener('click', toggleTheme);
 setScale(1.2);
 viewer.dataset.tool = 'select';
 

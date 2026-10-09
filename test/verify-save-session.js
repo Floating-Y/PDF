@@ -11,11 +11,27 @@ const app = fs.readFileSync(path.join(root, 'app/app.js'), 'utf8');
 const storage = fs.readFileSync(path.join(root, 'app/storage.js'), 'utf8');
 const elements = new Map();
 function element(selector) {
-  if (!elements.has(selector)) elements.set(selector, {
-    hidden: true, disabled: false, textContent: '', children: [],
-    classList: { toggle() {}, remove() {} }, addEventListener() {},
-    appendChild(child) { this.children.push(child); },
-  });
+  if (!elements.has(selector)) {
+    const classes = new Set();
+    const attributes = new Map();
+    elements.set(selector, {
+      hidden: true, disabled: false, inert: false, textContent: '', children: [],
+      classList: {
+        toggle(name, force) {
+          const enabled = force === undefined ? !classes.has(name) : force;
+          if (enabled) classes.add(name);
+          else classes.delete(name);
+          return enabled;
+        },
+        remove(name) { classes.delete(name); },
+        contains(name) { return classes.has(name); },
+      },
+      setAttribute(name, value) { attributes.set(name, String(value)); },
+      getAttribute(name) { return attributes.get(name) ?? null; },
+      addEventListener() {},
+      appendChild(child) { this.children.push(child); },
+    });
+  }
   return elements.get(selector);
 }
 const database = new Map();
@@ -29,7 +45,7 @@ const state = {
 const context = vm.createContext({
   S: state, TAURI: true, annSeq: 1, crypto: webcrypto, Uint8Array, File, console: { error() {} },
   idbKeyval: { createStore: () => ({}) }, // 真实 IndexedDB 与 idb-keyval 不进 vm，下面的 idbOp/idbDel mock 顶上
-  window: {}, document: { body: { inert: false }, activeElement: { blur() {} }, createElement: () => element('recent-button') },
+  window: {}, document: { body: element('body'), activeElement: { blur() {} }, createElement: () => element('recent-button') },
   $: element, toast: message => messages.push(message), esc: text => text,
   setTimeout: () => 1, clearTimeout() {}, ensureEmbeddedFace: async () => null,
   buildViewer: async () => {}, writeBytesTauri: async () => {}, ti: async () => null,
@@ -61,10 +77,15 @@ const evaluate = expression => vm.runInContext(expression, context);
   state.pageOrder.pop();
   context.markDirty();
   assert.equal(evaluate('dirty'), true);
+  assert.equal(context.document.body.classList.contains('has-changes'), true, '未保存修改应显示全局提示');
+  assert.equal(element('#btnMore').getAttribute('aria-label'), '更多工具（有未导出的修改）');
   assert.equal(await context.saveSession(), true);
   assert.equal(database.get(keyB).pageOrder.length, 2, '尾页删除必须留在会话中');
   state.pageOrder.push({ src: 2, rot: 0 });
   context.clearDirty();
+  assert.equal(evaluate('dirty'), false);
+  assert.equal(context.document.body.classList.contains('has-changes'), false, '清除修改状态应移除全局提示');
+  assert.equal(element('#btnMore').getAttribute('aria-label'), '更多工具');
   await context.maybeRestoreSession();
   assert.equal(state.pageOrder.length, 2, '尾页删除必须恢复');
   await context.applySession({ ...database.get(keyB), path: 'D:/A/report.pdf' });
@@ -96,6 +117,8 @@ const evaluate = expression => vm.runInContext(expression, context);
   context.ti = async () => 'D:/exported.pdf';
   assert.equal(await context.exportPdf(), true);
   assert.equal(evaluate('dirty'), false);
+  assert.equal(context.document.body.classList.contains('has-changes'), false, '导出成功应清除全局提示');
+  assert.equal(element('#btnMore').getAttribute('aria-label'), '更多工具');
   assert(!database.has(keyB));
   let printed;
   context.printBytes = bytes => { printed = bytes; };

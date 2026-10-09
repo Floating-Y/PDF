@@ -3,7 +3,7 @@
 //   1) npm run tauri -- build --debug --no-bundle --config test/tauri-e2e.json
 //   2) WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 启动 src-tauri/target/debug/pdfpro.exe
 //   3) node test/desktop-e2e.mjs（会关闭测试实例）
-import { cpSync, existsSync, rmSync } from 'fs';
+import { cpSync, existsSync, rmSync, writeFileSync } from 'fs';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { join, dirname, resolve } from 'path';
@@ -55,6 +55,17 @@ class Cdp {
   mouse(type, x, y, button = 'left', count = 1) {
     return this.send('Input.dispatchMouseEvent', { type, x, y, button, clickCount: count });
   }
+  async click(selector, text = '') {
+    const point = await this.eval(`(() => {
+      const element = [...document.querySelectorAll(${JSON.stringify(selector)})]
+        .find(element => element.textContent.includes(${JSON.stringify(text)}));
+      const rect = element?.getBoundingClientRect();
+      return rect?.width && rect.height ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
+    })()`);
+    if (!point) throw new Error('点击目标不可见：' + selector + ' ' + text);
+    await this.mouse('mousePressed', point.x, point.y);
+    await this.mouse('mouseReleased', point.x, point.y);
+  }
 }
 
 const results = [];
@@ -67,6 +78,22 @@ const check = (name, ok, detail = '') => {
 const ws = new WebSocket(await findPageWs());
 await new Promise((res, rej) => { ws.addEventListener('open', res); ws.addEventListener('error', rej); });
 const cdp = new Cdp(ws);
+const waitFor = async (expression, timeoutMs = 10000) => {
+  for (let elapsed = 0; elapsed < timeoutMs; elapsed += 200) {
+    if (await cdp.eval(expression)) return true;
+    await sleep(200);
+  }
+  return false;
+};
+const screenshot = async name => {
+  const result = await cdp.send('Page.captureScreenshot', { format: 'png' });
+  writeFileSync(join(__dirname, 'shot-desktop-' + name + '.png'), Buffer.from(result.data, 'base64'));
+};
+const key = async (key, code, windowsVirtualKeyCode, modifiers = 0) => {
+  for (const type of ['keyDown', 'keyUp']) {
+    await cdp.send('Input.dispatchKeyEvent', { type, key, code, windowsVirtualKeyCode, modifiers });
+  }
+};
 
 // 1. 环境就绪：Tauri 全局 + pdf.js + 应用加载
 await cdp.eval('Promise.all([document.fonts ? 1 : 1, new Promise(r => (S.pdfDoc || document.readyState === "complete") && r())]').catch(() => {});
@@ -81,7 +108,17 @@ if (!dataPath.replace(/\\/g, '/').toLowerCase().startsWith(ROOT.toLowerCase() + 
 }
 
 // 清掉上次运行留下的会话（IndexedDB 跨进程持久——桌面版崩溃恢复即依赖此），保证断言基数确定
-await cdp.eval('(async () => { for (const k of await idbKeys()) await idbDel(k); return true; })()');
+// 先重载清掉内存文档，避免 openPath 在切换文件时把审计留下的标注重新写回。
+await cdp.send('Page.reload');
+if (!await waitFor(`typeof toolbarPrefs !== 'undefined' && document.readyState === 'complete'`)) {
+  throw new Error('桌面测试初始化未就绪');
+}
+await cdp.eval(`(async () => {
+  for (const k of await idbKeys()) await idbDel(k);
+  localStorage.clear(); setReading(false); setSimple(true); updateToolbarPreferences(DEFAULT_TOOLBAR_TOOLS);
+  clearSearch(); document.getElementById('sidebar').classList.add('collapsed'); switchTab('thumbs');
+  return true;
+})()`);
 await sleep(300);
 
 // 2. 按路径打开测试 PDF（worker + cmaps 在 asset 协议下运行）
@@ -92,6 +129,129 @@ const st1 = await cdp.eval(`({ doc: S.docName, pages: S.pageOrder.length, path: 
 check('openPath 打开文档', okOpen && st1.doc === 'sample.pdf' && st1.pages === 20, JSON.stringify(st1));
 await cdp.eval('renderRecents()');
 check('桌面最近文件列表', await cdp.eval('!document.getElementById("recentBox").hidden && document.querySelectorAll(".recent-item").length > 0'));
+
+// 2a. 在实际 WebView2 验证简洁工具栏；只改测试实例偏好，不触碰日常会话。
+check('桌面默认简洁工具栏与收起侧栏', await cdp.eval(`(() => {
+  const visible = id => document.getElementById(id).getBoundingClientRect().width > 0;
+  return document.body.classList.contains('simple') && toolbarPrefs.join(',') === 'search,export' &&
+    getComputedStyle(document.getElementById('subbar')).display === 'none' &&
+    document.getElementById('sidebar').classList.contains('collapsed') &&
+    ['btnOpen', 'pageInput', 'btnZoomMenu', 'searchBox', 'btnSave', 'btnMore'].every(visible) &&
+    !document.querySelector('button[data-tool="ink"]').getBoundingClientRect().width;
+})()`));
+await screenshot('simple');
+await cdp.click('#btnMore');
+await cdp.click('.menu button', '自定义');
+check('桌面更多打开自定义窗口', await cdp.eval('document.getElementById("toolbarCustomize").open'));
+const windowPosition = await cdp.eval('({ x: screenX, y: screenY })');
+for (const id of ['search', 'export', 'ink']) await cdp.click(`#toolbarChoices input[value="${id}"]`);
+const customized = await cdp.eval(`({ prefs: toolbarPrefs.join(','), stored: localStorage.getItem('pdf-toolbar-tools'),
+  pinned: !!document.querySelector('#toolFavorites button[data-tool="ink"]'),
+  searchHidden: !document.getElementById('searchBox').getBoundingClientRect().width,
+  exportHidden: !document.getElementById('btnSave').getBoundingClientRect().width,
+  x: screenX, y: screenY })`);
+check('桌面真实勾选即时生效并记忆', customized.prefs === 'ink' && customized.stored === '["ink"]' &&
+  customized.pinned && customized.searchHidden && customized.exportHidden, JSON.stringify(customized));
+check('自定义窗口点击不触发标题栏拖动', customized.x === windowPosition.x && customized.y === windowPosition.y);
+await screenshot('customize');
+await cdp.click('#toolbarCustomize form[method="dialog"] button:not(#btnToolbarDefault)');
+check('桌面完成关闭自定义窗口', await cdp.eval('!document.getElementById("toolbarCustomize").open'));
+await cdp.send('Page.reload');
+await sleep(600);
+if (!await waitFor(`typeof toolbarPrefs !== 'undefined' && document.readyState === 'complete'`)) {
+  throw new Error('工具栏偏好重载后未就绪');
+}
+check('桌面重载保留常用工具', await cdp.eval(`toolbarPrefs.join(',') === 'ink' &&
+  !!document.querySelector('#toolFavorites button[data-tool="ink"]') && !document.getElementById('btnSave').getBoundingClientRect().width`));
+await cdp.eval(`openPath('${ROOT}/test/sample.pdf')`);
+if (!await waitFor(`!!S.pdfDoc && S.views.has(0) && !document.getElementById('btnSave').disabled`)) {
+  throw new Error('工具栏偏好重载后文档未就绪');
+}
+await key('f', 'KeyF', 70, 2);
+check('桌面 Ctrl+F 显示隐藏搜索并聚焦', await cdp.eval(`document.activeElement === document.getElementById('searchBox') &&
+  document.querySelector('.search-wrap').classList.contains('search-open') && document.getElementById('searchBox').getBoundingClientRect().width > 0`));
+await cdp.send('Input.insertText', { text: 'fox' });
+await key('Enter', 'Enter', 13);
+check('桌面隐藏搜索显示结果侧栏', await waitFor(`!searching && searchState.results.length > 0 &&
+  !document.getElementById('sidebar').classList.contains('collapsed') && document.getElementById('tab-results').classList.contains('active')`));
+await key('Escape', 'Escape', 27);
+check('桌面 Esc 收起临时搜索', await cdp.eval(`!document.querySelector('.search-wrap').classList.contains('search-open') &&
+  !document.getElementById('searchBox').getBoundingClientRect().width && !searchState.q`));
+
+// 真实菜单走导出合成；取消最后的文件选择，避免无人值守的原生另存框。
+const exportFromMenu = await cdp.eval(`(async () => {
+  const originalSaveBytes = saveBytes; let saveCalls = 0;
+  saveBytes = async () => { saveCalls++; return false; };
+  try {
+    openMoreMenu('file');
+    const button = [...menuEl.querySelectorAll('button')].find(button => button.textContent.trim().endsWith('导出'));
+    const enabled = !!button && !button.disabled;
+    if (enabled) button.click();
+    while (savingPdf) await new Promise(resolve => setTimeout(resolve, 200));
+    return { enabled, saveCalls, ready: !savingPdf && !document.body.inert,
+      cancelled: document.getElementById('toast').textContent.includes('已取消导出') };
+  } finally { saveBytes = originalSaveBytes; closeMenu(); }
+})()`);
+check('桌面隐藏导出仍可从文件更多执行', exportFromMenu.enabled && exportFromMenu.saveCalls === 1 &&
+  exportFromMenu.ready && exportFromMenu.cancelled, JSON.stringify(exportFromMenu));
+const saveGuards = await cdp.eval(`(async () => {
+  const saveButton = document.getElementById('btnSave');
+  const originalBuildExportBytes = buildExportBytes; let builds = 0;
+  buildExportBytes = async () => { builds++; throw new Error('未就绪时不应合成 PDF'); };
+  try {
+    saveButton.disabled = true; openMoreMenu('file');
+    const commands = [...menuEl.querySelectorAll('button')].filter(button => /导出|保存（写回/.test(button.textContent));
+    const disabled = commands.length === 2 && commands.every(button => button.disabled);
+    const notReady = await exportPdf() === false && await saveInPlace() === false;
+    closeMenu(); setPdfSaving(true);
+    saveButton.disabled = false; // 单独核验 savingPdf 守卫，不依赖按钮禁用状态。
+    const busy = await exportPdf() === false && await saveInPlace() === false;
+    return { disabled, notReady, busy, builds };
+  } finally { buildExportBytes = originalBuildExportBytes; setPdfSaving(false); closeMenu(); }
+})()`);
+check('桌面保存与导出遵守就绪及忙碌状态', saveGuards.disabled && saveGuards.notReady && saveGuards.busy &&
+  saveGuards.builds === 0, JSON.stringify(saveGuards));
+
+await cdp.click('#btnMore');
+await cdp.click('.menu button', '标注与改字');
+await cdp.click('.menu button', '方框');
+check('桌面隐藏工具显示颜色和退出入口', await cdp.eval(`S.tool === 'rect' &&
+  document.getElementById('toolContext').getBoundingClientRect().height > 0 &&
+  document.getElementById('currentTool').textContent.includes('方框') &&
+  document.getElementById('colorGroup').getBoundingClientRect().width > 0 &&
+  document.getElementById('btnExitTool').getBoundingClientRect().width > 0`));
+await cdp.click('#colorGroup button[data-color="#7bd389"]');
+check('桌面隐藏工具可改色', await cdp.eval('S.color') === '#7bd389');
+await screenshot('context');
+await cdp.click('#btnExitTool');
+check('桌面退出工具收起上下文栏', await cdp.eval(`S.tool === 'select' && !document.getElementById('toolContext').getBoundingClientRect().height`));
+await key('F9', 'F9', 120);
+check('桌面 F9 展开完整栏', await cdp.eval(`!document.body.classList.contains('simple') &&
+  !!document.querySelector('#subbar button[data-tool="ink"]') && document.getElementById('searchBox').getBoundingClientRect().width > 0`));
+await key('F9', 'F9', 120);
+check('桌面 F9 切回保留常用工具', await cdp.eval(`document.body.classList.contains('simple') && toolbarPrefs.join(',') === 'ink' &&
+  !!document.querySelector('#toolFavorites button[data-tool="ink"]')`));
+await cdp.eval(`updateToolbarPreferences(DEFAULT_TOOLBAR_TOOLS);
+  document.getElementById('sidebar').classList.add('collapsed'); switchTab('thumbs');`);
+for (const width of [900, 1280]) {
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width, height: 820, deviceScaleFactor: 1, mobile: false });
+  check(width + 'px 桌面工具栏避开窗口按钮', await cdp.eval(`(() => {
+    const controls = document.getElementById('winControls').getBoundingClientRect();
+    const toolbar = document.getElementById('toolbar');
+    return !document.getElementById('winControls').hidden && innerWidth === ${width} &&
+      toolbar.scrollWidth <= toolbar.clientWidth + 1 && [...toolbar.querySelectorAll(':scope > .tb-group')]
+        .filter(group => group.getBoundingClientRect().width > 0).every(group => group.getBoundingClientRect().right <= controls.left);
+  })()`));
+}
+await cdp.send('Emulation.clearDeviceMetricsOverride');
+await cdp.eval(`clearSearch(); document.querySelector('#colorGroup button[data-color="#f6d743"]').click();
+  setTool('select'); setReading(false); setSimple(true);
+  updateToolbarPreferences(DEFAULT_TOOLBAR_TOOLS); document.getElementById('sidebar').classList.add('collapsed');
+  switchTab('thumbs'); setScale(1); viewer.scrollTop = 0; viewer.scrollLeft = 0;`);
+if (!await waitFor(`S.views.has(0) && Math.abs(S.views.get(0).viewport.scale - 1) < 0.01`)) {
+  throw new Error('工具栏验证收尾后页面缩放未恢复');
+}
+await sleep(400);
 
 // 3. 画一个方框标注（CDP 真实鼠标事件 → pointer capture 正常）
 await cdp.eval(`setTool('rect')`);

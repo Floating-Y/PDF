@@ -87,6 +87,7 @@ body {
 /* 桌面版：右上角窗口按钮绝对定位占位，给工具栏内容留出保留区 */
 body.tauri #toolbar { padding-right: 152px; }
 .tb-group { display: flex; align-items: center; gap: 6px; }
+#toolbar > .tb-group { flex-wrap: wrap; min-width: 0; max-width: 100%; }
 .tb-group.grow { flex: 1; min-width: 110px; }
 .tb-sep { width: 1px; height: 24px; background: var(--line-strong); flex: none; }
 .tb-spacer { flex: 1; min-width: 20px; height: 1px; }
@@ -123,7 +124,24 @@ body.reading:not(.no-doc) #revealZone { display: block; }
 body.reading:not(.no-doc) #pagePill { display: inline-flex; }
 body.reading.reveal #pagePill { display: none; } /* 工具栏唤出时页码已在工具条上，胶囊让位 */
 
-#toolbar button, #subbar button {
+/* ---------- 简洁模式（默认）：单行工具栏 ---------- */
+/* 常用区复用原按钮；其余入口收进分组菜单，上下文操作仍按需出现。 */
+body.simple #subbar { display: none; }
+body.simple #topbars .toolbar-hidden:not(.search-open), body.simple #toolbar .tb-sep { display: none; }
+#toolFavorites { display: none; flex-wrap: wrap; min-width: 0; max-width: 100%; }
+body.simple #toolFavorites:not(:empty) { display: flex; }
+.tool-label { display: none; }
+body.simple #toolFavorites .tool-label { display: inline; }
+#toolFavorites button.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
+#toolContext {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 6px 10px;
+  background: var(--bar); border-bottom: 1px solid var(--line);
+}
+#toolContext[hidden], #topbars button[hidden] { display: none; }
+#currentTool { color: var(--accent-text); font-size: 12.5px; }
+#btnExitTool { margin-left: auto; }
+
+#topbars button {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   height: 30px; padding: 0 8px;
   background: var(--btn); color: var(--txt);
@@ -131,17 +149,17 @@ body.reading.reveal #pagePill { display: none; } /* 工具栏唤出时页码已�
   cursor: pointer; font-size: 12.5px; font-family: inherit;
   transition: background .15s, border-color .15s, color .15s, transform .15s, box-shadow .15s;
 }
-#toolbar button:hover:not(:disabled), #subbar button:hover:not(:disabled) { background: var(--btn-hover); border-color: var(--line-strong); }
-#toolbar button:active:not(:disabled), #subbar button:active:not(:disabled) { transform: translateY(1px); }
-#toolbar button:disabled, #subbar button:disabled { opacity: .38; cursor: default; }
-#toolbar button:focus-visible, #toolbar input:focus-visible, #subbar button:focus-visible, #subbar input:focus-visible, #sidebar button:focus-visible {
+#topbars button:hover:not(:disabled) { background: var(--btn-hover); border-color: var(--line-strong); }
+#topbars button:active:not(:disabled) { transform: translateY(1px); }
+#topbars button:disabled { opacity: .38; cursor: default; }
+#topbars button:focus-visible, #topbars input:focus-visible, #sidebar button:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 1px;
 }
 .btn-labeled svg { width: 14px; height: 14px; flex: none; }
 
-/* 导出按钮：有未导出的修改时显示圆点 */
-#btnSave { position: relative; }
-#btnSave.dirty::after {
+/* 导出可隐藏，更多入口仍显示未导出的修改。 */
+#btnSave, #btnMore { position: relative; }
+#btnSave.dirty::after, body.has-changes #btnMore::after {
   content: ""; position: absolute; top: -3px; right: -3px;
   width: 9px; height: 9px; border-radius: 50%;
   background: #f0a13b; border: 2px solid var(--bar);
@@ -179,7 +197,7 @@ body.reading.reveal #pagePill { display: none; } /* 工具栏唤出时页码已�
 #winMax.maximized .ic-max { display: none; }
 
 /* 图标 */
-#toolbar button svg, #subbar button svg, .search-wrap > svg {
+#topbars button svg, .search-wrap > svg {
   width: 15px; height: 15px; flex: none;
   fill: none; stroke: currentColor; stroke-width: 1.5;
   stroke-linecap: round; stroke-linejoin: round;
@@ -208,7 +226,7 @@ body.reading.reveal #pagePill { display: none; } /* 工具栏唤出时页码已�
 }
 
 /* 搜索框 */
-.search-wrap { position: relative; display: flex; align-items: center; width: 100%; }
+.search-wrap { position: relative; display: flex; align-items: center; width: 170px; max-width: 100%; }
 .search-wrap > svg { position: absolute; left: 10px; width: 14px; height: 14px; color: var(--muted); pointer-events: none; }
 #searchBox {
   width: 100%; height: 30px; padding: 0 12px 0 32px;
@@ -231,13 +249,13 @@ body.reading.reveal #pagePill { display: none; } /* 工具栏唤出时页码已�
 .stoggle input { accent-color: var(--accent); margin: 0; }
 
 /* 颜色圆点 */
-#toolbar .color-dot, #subbar .color-dot {
+#topbars .color-dot {
   width: 19px; height: 19px; padding: 0; border-radius: 50%;
   border: 2px solid var(--dot-ring);
   box-shadow: inset 0 0 0 1px rgba(0,0,0,.4);
 }
-#toolbar .color-dot:hover:not(:disabled), #subbar .color-dot:hover:not(:disabled) { transform: scale(1.15); border-color: var(--line-strong); }
-#toolbar .color-dot.active, #subbar .color-dot.active {
+#topbars .color-dot:hover:not(:disabled) { transform: scale(1.15); border-color: var(--line-strong); }
+#topbars .color-dot.active {
   border-color: transparent;
   box-shadow: 0 0 0 2px var(--bar), 0 0 0 4px var(--accent), inset 0 0 0 1px rgba(0,0,0,.4);
 }
@@ -464,6 +482,7 @@ body.dragging-file #viewerWrap::after {
 /* ---------- 下拉菜单（缩放 / 更多） ---------- */
 .menu {
   position: fixed; z-index: 100; min-width: 150px;
+  max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto;
   background: var(--bar); border: 1px solid var(--line-strong);
   border-radius: 10px; padding: 5px; box-shadow: var(--shadow-3);
   animation: menu-in .12s ease;
@@ -475,8 +494,9 @@ body.dragging-file #viewerWrap::after {
   padding: 7px 10px; cursor: pointer; font-size: 12.5px; font-family: inherit;
   text-align: left; transition: background .15s;
 }
-.menu button:hover { background: var(--btn-hover); }
+.menu button:hover:not(:disabled) { background: var(--btn-hover); }
 .menu button.danger { color: #e5604c; }
+.menu button:disabled { opacity: .45; cursor: default; }
 .menu .mcheck { width: 14px; flex: none; color: var(--accent); visibility: hidden; }
 .menu button.on .mcheck { visibility: visible; }
 /* 右键菜单里的颜色圆点（改色项）；当前色描圈高亮 */
@@ -485,13 +505,21 @@ body.dragging-file #viewerWrap::after {
 .menu-sep { height: 1px; background: var(--line); margin: 5px 8px; }
 
 /* ---------- 快捷键帮助 ---------- */
-#shortcutHelp {
+#shortcutHelp, #toolbarCustomize {
   background: var(--bar); color: var(--txt); border: 1px solid var(--line-strong);
   border-radius: 12px; padding: 22px 26px; box-shadow: var(--shadow-3);
   width: 400px; max-width: 90vw;
 }
-#shortcutHelp::backdrop { background: rgba(0,0,0,.45); }
-#shortcutHelp h2 { margin: 0 0 14px; font-size: 16px; }
+#shortcutHelp::backdrop, #toolbarCustomize::backdrop { background: rgba(0,0,0,.45); }
+#shortcutHelp h2, #toolbarCustomize h2 { margin: 0 0 14px; font-size: 16px; }
+#toolbarCustomize { max-height: calc(100vh - 24px); overflow-y: auto; }
+#toolbarCustomize p { font-size: 12.5px; margin: 0 0 12px; }
+#toolbarChoices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 0; margin: 0; border: 0; }
+#toolbarChoices legend { margin-bottom: 8px; font-size: 12.5px; }
+#toolbarChoices label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer; }
+#toolbarChoices input { accent-color: var(--accent); flex: none; }
+.customize-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 18px; }
+.customize-actions button { padding: 7px 12px; background: var(--btn); color: var(--txt); border: 1px solid var(--line); border-radius: 7px; cursor: pointer; font: inherit; }
 .sk-grid {
   display: grid; grid-template-columns: 1fr auto; gap: 7px 18px;
   font-size: 12.5px; align-items: center;
