@@ -3,7 +3,7 @@
 //   1) npm run tauri -- build --debug --no-bundle --config test/tauri-e2e.json
 //   2) WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 启动 src-tauri/target/debug/pdfpro.exe
 //   3) node test/desktop-e2e.mjs（会关闭测试实例）
-import { cpSync, existsSync } from 'fs';
+import { cpSync, existsSync, rmSync } from 'fs';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { join, dirname, resolve } from 'path';
@@ -11,6 +11,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // openPath 在 WebView 里需要磁盘绝对路径；统一正斜杠，便于与 S.srcPath 回读值比较
 const ROOT = resolve(__dirname, '..').replace(/\\/g, '/');
 cpSync(join(__dirname, 'sample.pdf'), join(__dirname, 'tmp-write-test.pdf')); // 写回测试副本
+// .bak 只在不存在时由 Rust 侧创建：上次运行残留的备份会让"首次备份"检查拿到旧夹具字节
+rmSync(join(__dirname, 'tmp-write-test.pdf.bak'), { force: true });
 const BASE = process.env.CDP_BASE || 'http://127.0.0.1:9222';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
