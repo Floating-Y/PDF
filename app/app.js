@@ -1959,6 +1959,7 @@ function updateCurrent() {
 function updatePageUI() {
   $('#pageInput').value = S.currentSlot + 1;
   $('#pageTotal').textContent = '/ ' + S.pageOrder.length;
+  $('#pagePillText').textContent = (S.currentSlot + 1) + ' / ' + S.pageOrder.length;
   // 状态透明：首/末页时翻页按钮不可点（pdf.js 同款反馈）
   $('#btnPrev').disabled = S.currentSlot <= 0;
   $('#btnNext').disabled = S.currentSlot >= S.pageOrder.length - 1;
@@ -2105,6 +2106,29 @@ function switchTab(name) {
 }
 
 
+// ---------------- 阅读模式（F8 / 工具按钮）：隐藏两层工具栏，顶缘悬停或上滚唤出 ----------------
+let readingMode = false;
+try { readingMode = localStorage.getItem('pdf-reading') === '1'; } catch (e) {}
+function setReading(on) {
+  readingMode = on;
+  document.body.classList.toggle('reading', on);
+  document.body.classList.remove('reveal');
+  $('#btnReading').classList.toggle('active', on);
+  try { localStorage.setItem('pdf-reading', on ? '1' : '0'); } catch (e) {}
+}
+setReading(readingMode);
+$('#btnReading').addEventListener('click', () => setReading(!readingMode));
+$('#revealZone').addEventListener('mouseenter', () => document.body.classList.add('reveal'));
+$('#topbars').addEventListener('mouseleave', () => document.body.classList.remove('reveal'));
+$('#pagePill').addEventListener('click', () => { document.body.classList.add('reveal'); $('#pageInput').focus(); });
+let lastScrollTop = 0;
+viewer.addEventListener('scroll', () => {
+  const dy = viewer.scrollTop - lastScrollTop;
+  lastScrollTop = viewer.scrollTop;
+  if (!readingMode || Math.abs(dy) < 40) return;
+  document.body.classList.toggle('reveal', dy < 0); // 上滚唤出，下滚收起
+});
+
 // ---------------- 键盘 ----------------
 document.addEventListener('keydown', e => {
   if (savingPdf) { e.preventDefault(); return; }
@@ -2127,6 +2151,7 @@ document.addEventListener('keydown', e => {
   const t = e.target;
   if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return;
   if (e.key === 'F1') { e.preventDefault(); $('#shortcutHelp').showModal(); return; }
+  if (e.key === 'F8') { e.preventDefault(); setReading(!readingMode); return; }
   if (e.key === 'Escape' && menuEl) { closeMenu(); return; }
   // 空格按住 = 临时手型（默认的空格滚动让位给拖动平移）
   if (e.key === ' ' && S.pdfDoc) {
@@ -2157,8 +2182,9 @@ document.addEventListener('keydown', e => {
   else if (!e.ctrlKey && !e.metaKey && (e.key === 'v' || e.key === 'V')) { setTool('select'); }
 });
 
-// 初始
-document.documentElement.dataset.theme = localStorage.getItem('pdf-theme') || 'dark';
+// 初始（主题：记忆值优先，否则跟随系统深浅色）
+document.documentElement.dataset.theme = localStorage.getItem('pdf-theme') ||
+  (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
 $('#btnTheme').addEventListener('click', () => {
   const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
   document.documentElement.dataset.theme = next;

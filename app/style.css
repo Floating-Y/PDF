@@ -100,6 +100,29 @@ body.tauri #toolbar { padding-right: 152px; }
 body.no-doc #subbar { display: none; }
 #colorGroup[hidden] { display: none; } /* .tb-group 的 display:flex 会压过 hidden 属性 */
 
+/* 两层工具栏的包裹层：阅读模式下整体滑出视野（单 transform，两层不会互相叠错位） */
+#topbars { flex: none; position: relative; z-index: 2; transition: transform .18s ease; }
+body.reading #topbars {
+  position: fixed; top: 0; left: 0; right: 0;
+  transform: translateY(-102%); box-shadow: var(--shadow-2);
+}
+body.reading.reveal #topbars { transform: translateY(0); }
+/* 阅读模式的唤出热区与悬浮页码胶囊（欢迎屏不生效：工具栏是唯一入口） */
+#revealZone { position: fixed; top: 0; left: 0; right: 0; height: 12px; z-index: 31; display: none; }
+body.reading:not(.no-doc) #revealZone { display: block; }
+#pagePill {
+  position: fixed; right: 16px; bottom: 16px; z-index: 20; display: none;
+  align-items: center; height: 26px; padding: 0 12px;
+  background: var(--toast-bg); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--line-strong); border-radius: 999px;
+  color: var(--txt); font-size: 12px; font-family: inherit;
+  font-variant-numeric: tabular-nums; cursor: pointer; box-shadow: var(--shadow-2);
+  transition: border-color .15s;
+}
+#pagePill:hover { border-color: var(--accent); }
+body.reading:not(.no-doc) #pagePill { display: inline-flex; }
+body.reading.reveal #pagePill { display: none; } /* 工具栏唤出时页码已在工具条上，胶囊让位 */
+
 #toolbar button, #subbar button {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   height: 30px; padding: 0 8px;
@@ -326,6 +349,9 @@ body.no-doc #sidebar { display: none; }
   position: relative; width: fit-content; margin: 0 auto 26px;
   box-shadow: var(--shadow-2); background: #fff; border-radius: 2px;
 }
+/* 暗色主题页面减光：纯白页在深底上过亮，压一档亮度（仅预览效果，导出不受影响） */
+:root:not([data-theme="light"]) .page,
+:root:not([data-theme="light"]) .thumb canvas { filter: brightness(.9); }
 #viewer canvas { display: block; }
 
 /* 文本层 / 标注层（功能性样式，勿改结构） */

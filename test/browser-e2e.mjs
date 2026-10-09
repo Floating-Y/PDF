@@ -331,6 +331,23 @@ try {
   const th1 = await cdp.eval('document.documentElement.dataset.theme');
   check('主题切换', th0 !== th1 && ['dark', 'light'].includes(th1), `${th0} → ${th1}`);
 
+  // 阅读模式：F8 开 → 工具栏整体滑出（fixed）+ 悬浮页码胶囊同步当前页；F8 关 → 布局还原
+  await cdp.eval('document.dispatchEvent(new KeyboardEvent("keydown", {key: "F8", bubbles: true, cancelable: true}))');
+  const rd1 = await cdp.eval(`(() => {
+    const tb = document.getElementById("topbars");
+    return document.body.classList.contains("reading") &&
+      getComputedStyle(tb).position === "fixed" &&
+      getComputedStyle(document.getElementById("pagePill")).display !== "none" &&
+      document.getElementById("pagePillText").textContent === (S.currentSlot + 1) + " / " + S.pageOrder.length;
+  })()`);
+  check('阅读模式：工具栏滑出 + 页码胶囊', rd1);
+  const rd2 = await cdp.eval(`(() => {
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "F8", bubbles: true, cancelable: true}));
+    return getComputedStyle(document.getElementById("topbars")).position === "relative" &&
+      !document.body.classList.contains("reading");
+  })()`);
+  check('阅读模式退出还原布局', rd2);
+
   // 真实导出入口：取消选择器仍保留未保存标记及恢复记录。
   const cancelled = await cdp.eval(`(async () => {
     const picker = window.showSaveFilePicker;
