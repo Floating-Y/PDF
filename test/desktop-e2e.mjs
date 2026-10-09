@@ -395,33 +395,68 @@ check('窗口控制按钮可见', wc.visible && wc.n === 3 && wc.drag, JSON.stri
 // OS 级拖动循环跟踪物理光标，CDP 合成事件驱动不了，只能验证命令可调用。
 const dragOk = await cdp.eval(`window.__TAURI_INTERNALS__.invoke('plugin:window|start_dragging').then(() => true).catch(e => false)`);
 check('窗口拖动权限（start_dragging 可调用）', dragOk === true);
-const mx = await cdp.eval(`(async () => {
-  const w = window.__TAURI__.window.getCurrentWindow();
-  await w.toggleMaximize(); await new Promise(r => setTimeout(r, 500));
-  const on = await w.isMaximized();
-  const icon = document.getElementById('winMax').classList.contains('maximized');
-  await w.toggleMaximize(); await new Promise(r => setTimeout(r, 500));
-  return { on, icon, off: !(await w.isMaximized()) };
-})()`);
+const restoredWindow = `window.__TAURI__.window.getCurrentWindow().isMaximized().then(maximized =>
+  !maximized && !document.getElementById('winMax').classList.contains('maximized'))`;
+await cdp.eval('window.__TAURI__.window.getCurrentWindow().unmaximize()');
+if (!await waitFor(restoredWindow)) throw new Error('最大化测试前窗口未还原');
+await cdp.eval('window.__TAURI__.window.getCurrentWindow().toggleMaximize()');
+const mx = {
+  on: await waitFor('window.__TAURI__.window.getCurrentWindow().isMaximized()'),
+  icon: await waitFor('document.getElementById("winMax").classList.contains("maximized")'),
+};
+await cdp.eval('window.__TAURI__.window.getCurrentWindow().toggleMaximize()');
+mx.off = await waitFor(restoredWindow);
 check('最大化切换与图标联动', mx.on && mx.icon && mx.off, JSON.stringify(mx));
 // 双击拖拽区（工具栏顶边留白处）= 最大化/还原（Tauri 内置），真实鼠标双击序列
+await cdp.eval('window.__TAURI__.window.getCurrentWindow().unmaximize()');
+if (!await waitFor(restoredWindow)) throw new Error('双击测试前窗口未还原');
 await cdp.mouse('mousePressed', 640, 4); await cdp.mouse('mouseReleased', 640, 4);
 await cdp.mouse('mousePressed', 640, 4, 'left', 2); await cdp.mouse('mouseReleased', 640, 4, 'left', 2);
-await sleep(700);
-const dbl = await cdp.eval(`window.__TAURI__.window.getCurrentWindow().isMaximized()`);
+const dbl = await waitFor('window.__TAURI__.window.getCurrentWindow().isMaximized()');
 check('双击标题栏最大化', dbl === true);
-if (dbl) { await cdp.eval(`window.__TAURI__.window.getCurrentWindow().toggleMaximize()`); await sleep(400); }
+await cdp.eval('window.__TAURI__.window.getCurrentWindow().unmaximize()');
+if (!await waitFor(restoredWindow)) throw new Error('双击测试后窗口未还原');
 
 // 9. 关闭按钮：干净状态（已保存）直接关闭，进程退出后 CDP 断连
+// 单实例转发可能恢复 sample.pdf 的未导出会话；先打开已写回的副本，确保测试干净关闭。
+const closingDocument = await cdp.eval(`(async () => ({
+  opened: await openPath('${ROOT}/test/tmp-write-test.pdf'), path: S.srcPath, dirty,
+  ready: !!S.pdfDoc && !document.getElementById('btnSave').disabled,
+}))()`);
+if (!closingDocument.opened || closingDocument.path !== `${ROOT}/test/tmp-write-test.pdf` ||
+    closingDocument.dirty !== false || !closingDocument.ready) {
+  throw new Error('关闭测试文档未就绪或仍有未导出修改：' + JSON.stringify(closingDocument));
+}
+const expectedPid = process.env.PDFPRO_E2E_PID ? Number(process.env.PDFPRO_E2E_PID) : null;
+if (expectedPid !== null && (!Number.isInteger(expectedPid) || expectedPid <= 0)) {
+  throw new Error('PDFPRO_E2E_PID 必须是测试实例的有效进程号');
+}
 const cb = await cdp.eval(`(() => { const r = document.getElementById('winClose').getBoundingClientRect();
   return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
 await cdp.mouse('mousePressed', cb.x, cb.y);
 await cdp.mouse('mouseReleased', cb.x, cb.y);
 await sleep(2500);
-let closed = false;
-try { await Promise.race([cdp.eval('1'), new Promise((_, rej) => setTimeout(rej, 1500))]); }
-catch (e) { closed = true; }
-check('关闭按钮退出进程', closed);
+let webviewClosed = false;
+let processExited = expectedPid === null;
+for (let attempt = 0; attempt < 20 && !(webviewClosed && processExited); attempt++) {
+  try {
+    const tabs = await (await fetch(BASE + '/json', { signal: AbortSignal.timeout(1500) })).json();
+    webviewClosed = !tabs.some(tab => tab.type === 'page' && /index\.html/.test(tab.url));
+  } catch (error) {
+    if (error.cause?.code === 'ECONNREFUSED') webviewClosed = true;
+    else if (error.name !== 'TimeoutError') throw error;
+  }
+  if (expectedPid !== null) {
+    try { process.kill(expectedPid, 0); processExited = false; }
+    catch (error) {
+      if (error.code === 'ESRCH') processExited = true;
+      else throw error;
+    }
+  }
+  if (!(webviewClosed && processExited)) await sleep(200);
+}
+check(expectedPid === null ? '关闭按钮关闭 WebView' : '关闭按钮退出进程', webviewClosed && processExited,
+  expectedPid === null ? '' : `pid ${expectedPid}`);
 
 console.log(process.exitCode ? '\n有失败项' : '\n全部通过');
 ws.close();
