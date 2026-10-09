@@ -28,6 +28,7 @@ const state = {
 };
 const context = vm.createContext({
   S: state, TAURI: true, annSeq: 1, crypto: webcrypto, Uint8Array, File, console: { error() {} },
+  idbKeyval: { createStore: () => ({}) }, // 真实 IndexedDB 与 idb-keyval 不进 vm，下面的 idbOp/idbDel mock 顶上
   window: {}, document: { body: { inert: false }, activeElement: { blur() {} }, createElement: () => element('recent-button') },
   $: element, toast: message => messages.push(message), esc: text => text,
   setTimeout: () => 1, clearTimeout() {}, ensureEmbeddedFace: async () => null,

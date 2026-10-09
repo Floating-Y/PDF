@@ -54,7 +54,7 @@ keep the first backup. The browser server listens only on `127.0.0.1`.
 app/        frontend shared by both editions — index.html, style.css, and plain
             scripts loaded in order: app.js (viewer & interactions), textedit.js
             (text-edit engine), export.js, search.js, storage.js
-vendor/     pdf.js, pdf-lib, fontkit + open-source fonts (versions pinned, offline)
+vendor/     pdf.js, pdf-lib, fontkit, idb-keyval 6.3.0 + open-source fonts (versions pinned, offline)
 src-tauri/  desktop shell (Tauri 2) — custom commands, single instance, file association
 tools/      build and fixture generators (build-web, gen-icon, gen-test-pdf*)
 test/       regression scripts and fixtures
@@ -69,5 +69,5 @@ Desktop E2E uses `test/tauri-e2e.json` to isolate its data; see the commands in 
 ## License
 
 Code is [MIT](LICENSE). Vendored components keep their licenses in-tree: pdf.js
-(Apache-2.0), pdf-lib and fontkit (MIT), Liberation and Noto fonts (SIL OFL 1.1) —
-see `vendor/*/LICENSE*`.
+(Apache-2.0), idb-keyval (Apache-2.0), pdf-lib and fontkit (MIT), Liberation and
+Noto fonts (SIL OFL 1.1) — see `vendor/*/LICENSE*` and `vendor/*-LICENCE`.

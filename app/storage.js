@@ -1,26 +1,14 @@
 
 // ---------------- 最近打开（文件句柄存 IndexedDB，可一键重开） ----------------
-function idbOpen() {
-  return new Promise((res, rej) => {
-    const r = indexedDB.open('pdfpro', 1);
-    r.onupgradeneeded = () => r.result.createObjectStore('kv');
-    r.onsuccess = () => res(r.result);
-    r.onerror = () => rej(r.error);
-  });
-}
+// kv 读写委托给 vendor/idb-keyval.umd.js（连接复用，免去每次 open/close 的事务管道）。
+// 沿用原库表名 pdfpro/kv：老版本写入的最近列表与恢复会话无需迁移。
+const KV = idbKeyval.createStore('pdfpro', 'kv');
 async function idbOp(mode, key, val) {
-  let db;
   try {
-    db = await idbOpen();
-    return await new Promise((res, rej) => {
-      const tx = db.transaction('kv', mode);
-      const rq = tx.objectStore('kv')[mode === 'readonly' ? 'get' : 'put'](mode === 'readonly' ? key : val, key);
-      tx.oncomplete = () => res(rq.result);
-      tx.onerror = () => rej(tx.error);
-      tx.onabort = () => rej(tx.error);
-    });
-  } catch (e) { return null; }
-  finally { if (db) db.close(); }
+    if (mode === 'readonly') return (await idbKeyval.get(key, KV)) ?? null;
+    await idbKeyval.set(key, val, KV);
+    return key;
+  } catch (e) { return null; } // 失败返回 null，调用方按"未保存/未读到"降级
 }
 async function loadRecents() { return (await idbOp('readonly', 'recents')) || []; }
 async function saveRecents(list) { await idbOp('readwrite', 'recents', list); }
@@ -97,29 +85,11 @@ async function sessKey(name, bytes, path) {
 }
 
 async function idbKeys() {
-  try {
-    const db = await idbOpen();
-    return await new Promise((res, rej) => {
-      const rq = db.transaction('kv').objectStore('kv').getAllKeys();
-      rq.onsuccess = () => res(rq.result || []);
-      rq.onerror = () => rej(rq.error);
-    });
-  } catch (e) { return []; }
+  try { return (await idbKeyval.keys(KV)) || []; } catch (e) { return []; }
 }
 async function idbDel(key) {
   if (!key) return;
-  let db;
-  try {
-    db = await idbOpen();
-    await new Promise((res, rej) => {
-      const tx = db.transaction('kv', 'readwrite');
-      tx.objectStore('kv').delete(key);
-      tx.oncomplete = res;
-      tx.onerror = () => rej(tx.error);
-      tx.onabort = () => rej(tx.error);
-    });
-  } catch (e) {}
-  finally { if (db) db.close(); }
+  try { await idbKeyval.del(key, KV); } catch (e) {}
 }
 
 let sessionSaveTimer = null;
