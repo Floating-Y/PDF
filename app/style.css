@@ -11,18 +11,17 @@
   --muted: #8a919b;
   --line: rgba(255,255,255,.07);
   --line-strong: rgba(255,255,255,.13);
-  --accent: #4f8ef7;
-  --accent-bright: #6ba1ff;
+  --accent: #2f9273;
+  --accent-bright: #4fb894;
   --accent-text: var(--accent-bright);
-  --accent-soft: rgba(79,142,247,.18);
-  --toast-bg: rgba(24,26,31,.85);
+  --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
   --scroll-thumb: rgba(255,255,255,.13);
   --scroll-thumb-hover: rgba(255,255,255,.26);
   --dot-ring: rgba(255,255,255,.18);
-  --radius: 8px;
-  --shadow-1: 0 1px 3px rgba(0,0,0,.35);
-  --shadow-2: 0 2px 6px rgba(0,0,0,.35), 0 10px 28px rgba(0,0,0,.3);
-  --shadow-3: 0 6px 18px rgba(0,0,0,.4);
+  --radius: 4px;
+  --shadow-1: 0 1px 2px rgba(0,0,0,.3);
+  --shadow-2: 0 2px 10px rgba(0,0,0,.3);
+  --shadow-3: 0 4px 16px rgba(0,0,0,.35);
   color-scheme: dark;
 }
 
@@ -39,15 +38,14 @@
   --muted: #5c6470;
   --line: rgba(15,23,42,.13);
   --line-strong: rgba(15,23,42,.26);
-  --accent-text: #1d5fc8;
-  --accent-soft: rgba(79,142,247,.16);
-  --toast-bg: rgba(255,255,255,.92);
+  --accent-text: #1e6e52;
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
   --scroll-thumb: rgba(15,23,42,.2);
   --scroll-thumb-hover: rgba(15,23,42,.35);
   --dot-ring: rgba(15,23,42,.38);
-  --shadow-1: 0 1px 3px rgba(15,23,42,.14);
-  --shadow-2: 0 2px 6px rgba(15,23,42,.14), 0 10px 28px rgba(15,23,42,.14);
-  --shadow-3: 0 6px 18px rgba(15,23,42,.18);
+  --shadow-1: 0 1px 2px rgba(15,23,42,.12);
+  --shadow-2: 0 2px 10px rgba(15,23,42,.14);
+  --shadow-3: 0 4px 16px rgba(15,23,42,.16);
   color-scheme: light;
 }
 
@@ -81,7 +79,7 @@ body {
 #toolbar {
   display: flex; align-items: center; gap: 6px; padding: 8px 10px;
   background: var(--bar); border-bottom: 1px solid var(--line);
-  box-shadow: var(--shadow-1); flex: none; flex-wrap: wrap; z-index: 2;
+  flex: none; flex-wrap: wrap; z-index: 2;
   position: relative;
 }
 /* 桌面版：右上角窗口按钮绝对定位占位，给工具栏内容留出保留区 */
@@ -96,7 +94,7 @@ body.tauri #toolbar { padding-right: 152px; }
 #subbar {
   display: flex; align-items: center; gap: 6px; padding: 5px 10px;
   background: var(--bar); border-bottom: 1px solid var(--line);
-  box-shadow: var(--shadow-1); flex: none; position: relative; z-index: 2;
+  flex: none; position: relative; z-index: 2;
 }
 body.no-doc #subbar { display: none; }
 #colorGroup[hidden] { display: none; } /* .tb-group 的 display:flex 会压过 hidden 属性 */
@@ -114,8 +112,8 @@ body.reading:not(.no-doc) #revealZone { display: block; }
 #pagePill {
   position: fixed; right: 16px; bottom: 16px; z-index: 20; display: none;
   align-items: center; height: 26px; padding: 0 12px;
-  background: var(--toast-bg); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-  border: 1px solid var(--line-strong); border-radius: 999px;
+  background: var(--bar);
+  border: 1px solid var(--line-strong); border-radius: 4px;
   color: var(--txt); font-size: 12px; font-family: inherit;
   font-variant-numeric: tabular-nums; cursor: pointer; box-shadow: var(--shadow-2);
   transition: border-color .15s;
@@ -145,9 +143,9 @@ body.simple #toolFavorites .tool-label { display: inline; }
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   height: 30px; padding: 0 8px;
   background: var(--btn); color: var(--txt);
-  border: 1px solid var(--line); border-radius: 7px;
+  border: 1px solid var(--line); border-radius: 4px;
   cursor: pointer; font-size: 12.5px; font-family: inherit;
-  transition: background .15s, border-color .15s, color .15s, transform .15s, box-shadow .15s;
+  transition: background .15s, border-color .15s, color .15s;
 }
 #topbars button:hover:not(:disabled) { background: var(--btn-hover); border-color: var(--line-strong); }
 #topbars button:active:not(:disabled) { transform: translateY(1px); }
@@ -169,15 +167,15 @@ body.simple #toolFavorites .tool-label { display: inline; }
 .seg {
   display: inline-flex; align-items: center; gap: 2px;
   background: var(--field); border: 1px solid var(--line);
-  border-radius: 9px; padding: 2px;
+  border-radius: 6px; padding: 2px;
 }
 #toolbar .seg > button, #subbar .seg > button {
   background: transparent; border: none; color: var(--muted);
-  height: 26px; min-width: 26px; padding: 0 5px; border-radius: 6px;
+  height: 26px; min-width: 26px; padding: 0 5px; border-radius: 4px;
 }
 #toolbar .seg > button:hover:not(:disabled), #subbar .seg > button:hover:not(:disabled) { background: var(--btn-hover); color: var(--txt); }
 #toolbar .seg > button:active:not(:disabled), #subbar .seg > button:active:not(:disabled) { transform: none; }
-#toolbar .seg > button.active, #subbar .seg > button.active { background: var(--accent); color: #fff; }
+#toolbar .seg > button.active, #subbar .seg > button.active { background: var(--accent-soft); color: var(--accent-text); }
 .seg-div { width: 1px; height: 16px; background: var(--line-strong); margin: 0 3px; flex: none; }
 
 /* 自绘窗口控制（桌面版无原生标题栏，工具栏兼任）：绝对定位钉在右上角，
@@ -254,7 +252,7 @@ body.simple #toolFavorites .tool-label { display: inline; }
   border: 2px solid var(--dot-ring);
   box-shadow: inset 0 0 0 1px rgba(0,0,0,.4);
 }
-#topbars .color-dot:hover:not(:disabled) { transform: scale(1.15); border-color: var(--line-strong); }
+#topbars .color-dot:hover:not(:disabled) { border-color: var(--line-strong); }
 #topbars .color-dot.active {
   border-color: transparent;
   box-shadow: 0 0 0 2px var(--bar), 0 0 0 4px var(--accent), inset 0 0 0 1px rgba(0,0,0,.4);
@@ -290,21 +288,20 @@ body.no-doc #sidebar { display: none; }
 #tab-thumbs { padding: 12px 10px; }
 .thumb {
   position: relative; margin: 0 auto 14px; width: 160px; cursor: pointer;
-  border: 2px solid transparent; border-radius: 8px; padding: 0;
-  transition: border-color .15s, box-shadow .15s, transform .15s;
+  border: 2px solid transparent; border-radius: 6px; padding: 0;
+  transition: border-color .15s, box-shadow .15s;
 }
-.thumb canvas { display: block; width: 100%; background: #fff; border-radius: 5px; box-shadow: var(--shadow-1); }
+.thumb canvas { display: block; width: 100%; background: #fff; border-radius: 4px; box-shadow: var(--shadow-1); }
 .thumb.loading canvas { background: var(--field); animation: thumbPulse 1.2s ease-in-out infinite; }
 @keyframes thumbPulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
-.thumb:hover { transform: translateY(-1px); }
 .thumb.current { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .thumb .pnum { text-align: center; color: var(--muted); font-size: 11px; padding: 3px 0 1px; }
 .thumb .tbtns { position: absolute; top: 5px; right: 5px; display: none; gap: 2px; }
 .thumb:hover .tbtns { display: flex; }
 .thumb .tbtns button {
-  background: rgba(16,17,20,.78); color: #fff; border: none; border-radius: 5px;
+  background: rgba(16,17,20,.78); color: #fff; border: none; border-radius: 4px;
   padding: 3px 6px; cursor: pointer; font-size: 11px; line-height: 1;
-  backdrop-filter: blur(4px); transition: background .15s;
+  transition: background .15s;
 }
 .thumb .tbtns button:hover { background: rgba(50,54,62,.92); }
 .thumb.dragover { border-color: var(--accent); }
@@ -315,7 +312,7 @@ body.no-doc #sidebar { display: none; }
 #tab-outline ul { list-style: none; margin: 0; padding: 4px; }
 #tab-outline li {
   padding: 6px 10px; cursor: pointer; white-space: nowrap; overflow: hidden;
-  text-overflow: ellipsis; border-radius: 6px; color: var(--txt);
+  text-overflow: ellipsis; border-radius: 4px; color: var(--txt);
   transition: background .15s;
 }
 #tab-outline li:hover { background: var(--btn-hover); }
@@ -328,7 +325,7 @@ body.no-doc #sidebar { display: none; }
 #tab-results .rtools { display: flex; gap: 14px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
 #tab-results .rnav button {
   background: var(--field); border: 1px solid var(--line); color: var(--txt);
-  border-radius: 5px; width: 22px; height: 20px; cursor: pointer;
+  border-radius: 4px; width: 22px; height: 20px; cursor: pointer;
   font-size: 13px; line-height: 1; padding: 0;
   display: inline-flex; align-items: center; justify-content: center;
 }
@@ -361,7 +358,7 @@ body.no-doc #sidebar { display: none; }
 /* Ctrl+拖拽框选缩放：跟随鼠标的屏幕虚线框 */
 .marquee-zoom {
   position: fixed; z-index: 90; pointer-events: none;
-  border: 1.5px dashed var(--accent); background: rgba(79,142,247,.14); border-radius: 2px;
+  border: 1.5px dashed var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 2px;
 }
 #viewer .page {
   position: relative; width: fit-content; margin: 0 auto 26px;
@@ -374,7 +371,7 @@ body.no-doc #sidebar { display: none; }
 
 /* 文本层 / 标注层（功能性样式，勿改结构） */
 .textLayer { position: absolute; inset: 0; overflow: hidden; line-height: 1; opacity: 1; }
-.textLayer ::selection { background: rgba(79,142,247,.35); }
+.textLayer ::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
 .annotationLayer { position: absolute; inset: 0; pointer-events: none; }
 .annotationLayer svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .annotationLayer svg * { pointer-events: none; }
@@ -383,12 +380,12 @@ body.no-doc #sidebar { display: none; }
 .ann-shape.selected { pointer-events: auto; cursor: move; }
 
 /* 搜索命中：全部高亮（浅底）+ 当前命中（深底描边） */
-.search-hit { fill: rgba(79,142,247,.22); pointer-events: none; }
-.search-hit.cur { fill: rgba(79,142,247,.45); stroke: var(--accent); stroke-width: 1.5; }
+.search-hit { fill: color-mix(in srgb, var(--accent) 22%, transparent); pointer-events: none; }
+.search-hit.cur { fill: color-mix(in srgb, var(--accent) 45%, transparent); stroke: var(--accent); stroke-width: 1.5; }
 
 /* 搜索命中闪烁定位 */
 .search-flash {
-  fill: rgba(79,142,247,.3); stroke: var(--accent); stroke-width: 1.5;
+  fill: color-mix(in srgb, var(--accent) 30%, transparent); stroke: var(--accent); stroke-width: 1.5;
   pointer-events: none; animation: searchFlash 2s ease forwards;
 }
 @keyframes searchFlash { 0%, 65% { opacity: 1; } 100% { opacity: 0; } }
@@ -400,12 +397,12 @@ body.no-doc #sidebar { display: none; }
   display: flex; gap: 2px; padding: 3px;
   background: #23262c; color: #e8ebf0;
   border: 1px solid rgba(255,255,255,.16);
-  border-radius: 9px; box-shadow: var(--shadow-3);
+  border-radius: 6px; box-shadow: var(--shadow-3);
 }
 #selBar[hidden] { display: none; } /* display:flex 会压过 hidden 属性，需显式关掉 */
 #selBar button {
   display: inline-flex; align-items: center; gap: 5px;
-  height: 26px; padding: 0 10px; border: none; border-radius: 6px;
+  height: 26px; padding: 0 10px; border: none; border-radius: 4px;
   background: transparent; color: #e8ebf0; cursor: pointer;
   font-size: 12.5px; font-family: inherit; white-space: nowrap;
   transition: background .15s;
@@ -418,26 +415,21 @@ body.no-doc #sidebar { display: none; }
   position: absolute; inset: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center; background: var(--bg-deep); z-index: 5;
 }
-#welcome .logo { width: 64px; height: 64px; color: var(--accent); margin-bottom: 18px; }
+#welcome .logo { width: 40px; height: 40px; color: var(--accent); margin-bottom: 14px; }
 #welcome .logo, #welcome .logo path {
   fill: none; stroke: currentColor; stroke-width: 1.2;
   stroke-linecap: round; stroke-linejoin: round;
 }
-#welcome h1 { font-weight: 600; font-size: 22px; margin: 0 0 8px; letter-spacing: .5px; }
-#welcome p { color: var(--muted); margin: 0 0 26px; }
+#welcome h1 { font-weight: 600; font-size: 18px; margin: 0 0 6px; }
+#welcome p { color: var(--muted); margin: 0 0 22px; }
 #welcome button#btnOpen2 {
-  background: var(--accent); color: #fff; border: none; border-radius: 8px;
-  padding: 10px 28px; font-size: 14.5px; font-family: inherit; cursor: pointer;
-  box-shadow: 0 4px 14px rgba(79,142,247,.35);
-  transition: background .15s, transform .15s, box-shadow .15s;
+  background: var(--accent); color: #fff; border: none; border-radius: 4px;
+  padding: 8px 20px; font-size: 13px; font-family: inherit; cursor: pointer;
+  transition: background .15s;
 }
-#welcome button#btnOpen2:hover { background: var(--accent-bright); transform: translateY(-1px); }
+#welcome button#btnOpen2:hover { background: var(--accent-bright); }
 #welcome.hidden { display: none; }
-.drop-hint {
-  margin-top: 26px; padding: 20px 42px;
-  border: 2px dashed var(--muted); border-radius: 12px;
-  color: var(--muted); font-size: 12.5px;
-}
+.drop-hint { margin-top: 14px; color: var(--muted); font-size: 12px; }
 
 /* 最近打开 */
 .recent { margin-top: 30px; width: 380px; max-width: 86vw; }
@@ -450,7 +442,7 @@ body.no-doc #sidebar { display: none; }
 .recent-item {
   display: flex; align-items: center; gap: 10px;
   background: var(--panel); border: 1px solid var(--line);
-  color: var(--txt); border-radius: 8px; padding: 8px 12px;
+  color: var(--txt); border-radius: 6px; padding: 8px 12px;
   cursor: pointer; font-size: 12.5px; font-family: inherit; text-align: left;
   transition: background .15s, border-color .15s;
 }
@@ -474,7 +466,7 @@ body.no-doc #sidebar { display: none; }
 body.dragging-file #viewerWrap::after {
   content: "松开以打开 PDF"; position: absolute; inset: 0; z-index: 8;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(79,142,247,.18);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
   border: 3px dashed var(--accent);
   color: #fff; font-size: 22px; pointer-events: none;
 }
@@ -484,13 +476,13 @@ body.dragging-file #viewerWrap::after {
   position: fixed; z-index: 100; min-width: 150px;
   max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto;
   background: var(--bar); border: 1px solid var(--line-strong);
-  border-radius: 10px; padding: 5px; box-shadow: var(--shadow-3);
+  border-radius: 6px; padding: 5px; box-shadow: var(--shadow-3);
   animation: menu-in .12s ease;
 }
 @keyframes menu-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 .menu button {
   display: flex; align-items: center; gap: 8px; width: 100%;
-  background: transparent; color: var(--txt); border: none; border-radius: 6px;
+  background: transparent; color: var(--txt); border: none; border-radius: 4px;
   padding: 7px 10px; cursor: pointer; font-size: 12.5px; font-family: inherit;
   text-align: left; transition: background .15s;
 }
@@ -507,7 +499,7 @@ body.dragging-file #viewerWrap::after {
 /* ---------- 快捷键帮助 ---------- */
 #shortcutHelp, #toolbarCustomize {
   background: var(--bar); color: var(--txt); border: 1px solid var(--line-strong);
-  border-radius: 12px; padding: 22px 26px; box-shadow: var(--shadow-3);
+  border-radius: 6px; padding: 22px 26px; box-shadow: var(--shadow-3);
   width: 400px; max-width: 90vw;
 }
 #shortcutHelp::backdrop, #toolbarCustomize::backdrop { background: rgba(0,0,0,.45); }
@@ -519,7 +511,7 @@ body.dragging-file #viewerWrap::after {
 #toolbarChoices label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer; }
 #toolbarChoices input { accent-color: var(--accent); flex: none; }
 .customize-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 18px; }
-.customize-actions button { padding: 7px 12px; background: var(--btn); color: var(--txt); border: 1px solid var(--line); border-radius: 7px; cursor: pointer; font: inherit; }
+.customize-actions button { padding: 7px 12px; background: var(--btn); color: var(--txt); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; font: inherit; }
 .sk-grid {
   display: grid; grid-template-columns: 1fr auto; gap: 7px 18px;
   font-size: 12.5px; align-items: center;
@@ -527,22 +519,22 @@ body.dragging-file #viewerWrap::after {
 .sk-grid span { color: var(--muted); }
 .sk-grid kbd {
   background: var(--field); border: 1px solid var(--line-strong); border-bottom-width: 2px;
-  border-radius: 5px; padding: 2px 7px; font-size: 11.5px; font-family: inherit;
+  border-radius: 4px; padding: 2px 7px; font-size: 11.5px; font-family: inherit;
   justify-self: end; white-space: nowrap;
 }
 #btnHelpClose {
   margin-top: 18px; width: 100%; height: 32px;
   background: var(--btn); color: var(--txt); border: 1px solid var(--line);
-  border-radius: 8px; cursor: pointer; font-size: 12.5px; font-family: inherit;
+  border-radius: 4px; cursor: pointer; font-size: 12.5px; font-family: inherit;
 }
 #btnHelpClose:hover { background: var(--btn-hover); }
 
 /* ---------- Toast ---------- */
 #toast {
   position: absolute; left: 50%; bottom: 30px; transform: translateX(-50%);
-  background: var(--toast-bg); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  background: var(--bar);
   color: var(--txt); border: 1px solid var(--line-strong);
-  padding: 9px 18px; border-radius: 10px; font-size: 13px;
+  padding: 9px 18px; border-radius: 6px; font-size: 13px;
   display: none; z-index: 9; max-width: 70%;
   box-shadow: var(--shadow-2);
   animation: toast-in .22s ease;
