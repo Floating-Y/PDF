@@ -5,6 +5,8 @@ Built for personal use — deliberately feature-light, extensible by staying sim
 (development conventions in [AGENTS.md](AGENTS.md)). No npm runtime dependencies,
 no build step, works offline. Files never leave your machine.
 
+I built this for my own use, but I'm glad if it helps anyone else who needs it.
+
 ## Running
 
 **Browser edition**: double-click `start.bat` (or `node server.js 5175`), then open
