@@ -68,7 +68,7 @@ async function saveInPlace() {
     clearDirty();
     clearTimeout(sessionSaveTimer);
     await idbDel(sessionKey); // key 含旧文件摘要，重建前删掉
-    if (await reloadAfterInPlaceWrite()) toast('已保存：' + S.docName);
+    if (await reloadAfterInPlaceWrite(bytes)) toast('已保存：' + S.docName);
     return true;
   } catch (err) {
     console.error(err);
@@ -77,9 +77,9 @@ async function saveInPlace() {
   } finally { setPdfSaving(false); }
 }
 const normPath = p => p.replace(/\//g, '\\').toLowerCase(); // Windows 路径比较：分隔符 + 大小写归一
-async function reloadAfterInPlaceWrite() {
+async function reloadAfterInPlaceWrite(bytes) {
   const { scale, zoomMode, currentSlot } = S;
-  if (!(await openPath(S.srcPath, true))) { toast('已保存，但重新读取文件失败，请手动重新打开'); return false; }
+  if (!(await openPath(S.srcPath, true, bytes))) { toast('已保存，但重新读取文件失败，请手动重新打开'); return false; }
   if (S.pdfDoc) {
     // 先跳页再适配：fitWidth/fitPage 按当前页尺寸计算，顺序反了会用错页
     jumpToSlot(Math.min(currentSlot, S.pageOrder.length - 1));
@@ -119,6 +119,8 @@ function printBytes(bytes) {
   document.body.appendChild(fr);
 }
 
+const fontBytesCache = new Map(); // 字体文件 -> 字节：重复导出不再重新 fetch（Noto 有十几 MB）
+
 async function buildExportBytes() {
   const src = await PDFLib.PDFDocument.load(S.srcBytes);
   const out = await PDFLib.PDFDocument.create();
@@ -134,7 +136,11 @@ async function buildExportBytes() {
   const fontObjs = new Map(); // file -> PDFFont
   for (const file of needed) {
     try {
-      const bytes = await fetch('/vendor/fonts/' + file).then(r => { if (!r.ok) throw new Error(file); return r.arrayBuffer(); });
+      let bytes = fontBytesCache.get(file);
+      if (!bytes) {
+        bytes = await fetch('/vendor/fonts/' + file).then(r => { if (!r.ok) throw new Error(file); return r.arrayBuffer(); });
+        fontBytesCache.set(file, bytes);
+      }
       fontObjs.set(file, await out.embedFont(new Uint8Array(bytes), { subset: true }));
     } catch (e) {
       console.error('font embed failed', file, e);
@@ -258,7 +264,7 @@ async function saveBytes(bytes, name) {
       clearDirty();
       clearTimeout(sessionSaveTimer);
       await idbDel(S.sessionKey);
-      if (await reloadAfterInPlaceWrite()) toast('已保存（覆盖原文件）：' + S.docName);
+      if (await reloadAfterInPlaceWrite(bytes)) toast('已保存（覆盖原文件）：' + S.docName);
     } else {
       toast('已导出：' + path.replace(/^.*[\\/]/, ''));
     }

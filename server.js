@@ -34,7 +34,10 @@ http.createServer((req, res) => {
     if (!isPublicFile(realFile)) { res.writeHead(403); return res.end(); }
     fs.readFile(realFile, (err, data) => {
       if (err) { res.writeHead(404); return res.end('not found'); }
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(realFile).toLowerCase()] || 'application/octet-stream' });
+      // vendor 库文件锁定版本从不改：允许浏览器缓存，开发刷新免得每次重下几 MB
+      const headers = { 'Content-Type': MIME[path.extname(realFile).toLowerCase()] || 'application/octet-stream' };
+      if (/^vendor[\\/]/i.test(path.relative(ROOT, realFile))) headers['Cache-Control'] = 'public, max-age=86400';
+      res.writeHead(200, headers);
       res.end(data);
     });
   });

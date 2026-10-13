@@ -78,6 +78,7 @@ renderRecents();
 // 每次修改防抖 800ms 写入 IndexedDB；内容摘要隔离同名同大小文件，桌面版再按路径隔离副本。
 // beforeunload 只能拦正常关闭，崩溃 / 杀进程 / 断电全靠这里兜底。
 const SESS_PREFIX = 'sess:';
+let sessionFileSaved = false; // 本次打开是否已把原文件字节写入 session-file
 async function sessKey(name, bytes, path) {
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
   const hash = [...digest].map(n => n.toString(16).padStart(2, '0')).join('');
@@ -101,6 +102,12 @@ async function saveSession() {
   if (!S.pdfDoc || !S.sessionKey) return false;
   if (!hasDocumentChanges()) { await idbDel(S.sessionKey); return true; }
   if (!dirty) return false;
+  // 原文件字节推迟到首次真实修改再留档（启动横幅"继续编辑"免找原文件）：
+  // 每次打开就写等于把整个 PDF 白拷进 IndexedDB，大文件明显拖慢打开
+  if (!sessionFileSaved && S.srcBytes) {
+    sessionFileSaved = true;
+    idbOp('readwrite', 'session-file', { name: S.docName, size: S.docSize, bytes: S.srcBytes, key: S.sessionKey });
+  }
   const anns = [];
   for (const list of S.anns.values()) anns.push(...list);
   const result = await idbOp('readwrite', S.sessionKey, {

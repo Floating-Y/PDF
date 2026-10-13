@@ -6,6 +6,7 @@ use base64::Engine;
 use tauri::{Emitter, Manager};
 
 // 对话框命令用 async（跑在线程池）：同步命令在主线程开模态对话框有死锁风险。
+// read_file / write_chunk 同理：大文件 base64 编码与落盘不能占主线程。
 // 路径用 to_string_lossy：非 UTF-8 路径（罕见）会得到错误路径 → 读文件时可见报错，
 // 而不是 into_string().ok() 的静默无反应
 #[tauri::command]
@@ -24,14 +25,14 @@ async fn dialog_save_pdf(default_name: String) -> Option<String> {
 
 // 读整个文件返回 base64（JSON 传大数组太慢；base64 单字符串两端都快）
 #[tauri::command]
-fn read_file(path: String) -> Result<String, String> {
+async fn read_file(path: String) -> Result<String, String> {
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
     Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
 // 分块只改临时文件；最后一块写完再备份和替换，途中失败不动原文件。
 #[tauri::command]
-fn write_chunk(
+async fn write_chunk(
     path: String, temporary_path: String, b64: String, append: bool, finish: bool,
 ) -> Result<(), String> {
     validate_temporary_path(&path, &temporary_path).map_err(|e| e.to_string())?;

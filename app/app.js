@@ -24,13 +24,16 @@ async function writeBytesTauri(path, bytes) {
   }
 }
 // 按路径打开（桌面版：选择器 / 拖拽 / 最近打开 / 文件关联共用）
-async function openPath(path, savedReload = false) {
+async function openPath(path, savedReload = false, bytes = null) {
   if (savingPdf && !savedReload) { toast('正在保存，请稍后再打开文件'); return false; }
   toast('正在打开：' + path.replace(/^.*[\\/]/, ''), 8000);
   try {
-    const bin = atob(await ti('read_file', { path }));
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    // bytes 已在手（写回原文件后的状态重建）就跳过磁盘重读 + base64 往返
+    if (!bytes) {
+      const bin = atob(await ti('read_file', { path }));
+      bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    }
     // await：写回后的 reload 依赖"打开完成"语义（跳页/恢复缩放要在视图重建后进行）
     return await openFile(new File([bytes], path.replace(/^.*[\\/]/, ''), { type: 'application/pdf' }), { path }, null, savedReload);
   } catch (e) {
@@ -58,6 +61,7 @@ let pageEls = [];
 let io = null;
 const renderTasks = new Map(); // slot -> {render, text}
 const slotRetries = new Map(); // slot -> 已自动重试次数（防节流下无限重试）
+const dimCache = new Map(); // "src:rot" -> {w,h}：按页内容缓存，删页/移页重建不失效，打开新文档时清空
 
 const viewer = $('#viewer');
 const viewerWrap = $('#viewerWrap');
@@ -220,8 +224,6 @@ async function openFile(file, handle = null, handleItem = null, savedReload = fa
     S.srcPath = (handle && handle.path) || null;
     S.sessionKey = sessionKey;
     $('#btnSave').disabled = true; // 视图和恢复会话就绪前不允许合成保存
-    // 原文件字节留档 IndexedDB：启动横幅"继续编辑"无需用户再找原文件
-    idbOp('readwrite', 'session-file', { name: file.name, size: file.size, bytes, key: sessionKey });
     S.pageOrder = Array.from({ length: doc.numPages }, (_, i) => ({ src: i, rot: 0 }));
     S.anns = new Map(); S.tcCache = new Map(); S.history = []; S.redo = [];
     // 旧文档的搜索结果对新文档无意义，重置
@@ -232,6 +234,8 @@ async function openFile(file, handle = null, handleItem = null, savedReload = fa
     S.views.clear(); S.slotDims.clear();
     annSeq = 1;
     resetEmbeddedCache();
+    dimCache.clear();
+    sessionFileSaved = false; // 原文件字节留档推迟到首次真实修改（见 storage.js saveSession）
     clearDirty();
     hideSelBar();
     document.body.classList.remove('no-doc');
@@ -342,11 +346,9 @@ async function buildViewer(preserveSlot = 0) {
   }
 
   // 先取每页尺寸（scale=1）并设好布局，再开始观察渲染，
-  // 避免零高度页面全部被 IO 判定为可见而并发渲染、互相取消
-  for (let i = 0; i < S.pageOrder.length; i++) {
-    if (S.gen !== gen) return;
-    await ensureDims(i);
-  }
+  // 避免零高度页面全部被 IO 判定为可见而并发渲染、互相取消。
+  // 并发取：串行 await 每页一次 worker 往返，大文档首屏前要干等数百次
+  await Promise.all(S.pageOrder.map((_, i) => ensureDims(i)));
   if (S.gen !== gen) return;
   pageEls.forEach((_, i) => setPageInnerSize(i));
 
@@ -368,13 +370,19 @@ async function buildViewer(preserveSlot = 0) {
 }
 
 async function ensureDims(slot) {
-  if (S.slotDims.has(slot)) return;
   const slotObj = S.pageOrder[slot];
-  if (!slotObj) return;
-  const page = await S.pdfDoc.getPage(slotObj.src + 1);
-  const rot = (page.rotate + slotObj.rot) % 360;
-  const v1 = page.getViewport({ scale: 1, rotation: rot });
-  S.slotDims.set(slot, { w: v1.width, h: v1.height });
+  if (!slotObj || S.slotDims.has(slot)) return;
+  const key = slotObj.src + ':' + slotObj.rot; // 页自身 rotate 对同一 src 不变，src:rot 唯一确定尺寸
+  let d = dimCache.get(key);
+  if (!d) {
+    const page = await S.pdfDoc.getPage(slotObj.src + 1);
+    const rot = (page.rotate + slotObj.rot) % 360;
+    const v1 = page.getViewport({ scale: 1, rotation: rot });
+    d = { w: v1.width, h: v1.height };
+    dimCache.set(key, d);
+  }
+  // await 期间页面顺序可能又变了（快速删页/换文档）：过期结果不写入
+  if (S.pageOrder[slot] === slotObj) S.slotDims.set(slot, d);
 }
 
 function setPageInnerSize(slot) {
@@ -1697,7 +1705,7 @@ async function rotateCurrent(d) {
   setPageInnerSize(slot);
   if (S.zoomMode === 'fitw') fitWidth(); else if (S.zoomMode === 'fitp') fitPage(); // 旋转改变宽高，适应模式需重算
   renderPage(slot);
-  buildThumbs();
+  renderThumb(slot);
   markDirty();
 }
 
@@ -2026,6 +2034,7 @@ function updatePageUI() {
 
 // ---------------- 缩略图 ----------------
 let thumbsGen = 0;
+let thumbEls = []; // 当前缩略图元素（按 slot 索引，旋转单页只重画该格）
 const THUMB_W = 156; // 卡片宽：侧栏 208 - 内边距/滚动条后恰好放下，不出横向滚动条
 async function buildThumbs() {
   const gen = ++thumbsGen; // 重入保护：快速连续旋转/删页时旧循环立即让位，避免缩略图重复
@@ -2034,7 +2043,7 @@ async function buildThumbs() {
   box.textContent = '';
   // 先把整列骨架立起来（占位画布 + 页码），当前页蓝框立即出现，
   // 缩略图再进串行队列逐个渲染——避免打开文档后侧栏长时间一片空白
-  const els = [];
+  const els = thumbEls = [];
   for (let i = 0; i < S.pageOrder.length; i++) {
     const thumb = document.createElement('div');
     thumb.className = 'thumb loading';
@@ -2068,33 +2077,36 @@ async function buildThumbs() {
   box.scrollTop = keepScroll;
   for (let i = 0; i < S.pageOrder.length; i++) {
     if (gen !== thumbsGen) return;
-    const slotObj = S.pageOrder[i];
-    // 渲染缩略图（进串行队列 + 超时保护，卡死则跳过该缩略图）
-    try {
-      const page = await S.pdfDoc.getPage(slotObj.src + 1);
-      const rot = (page.rotate + slotObj.rot) % 360;
-      const v1 = page.getViewport({ scale: 1, rotation: rot });
-      const ts = Math.min(THUMB_W / v1.width, 0.42);
-      const vp = page.getViewport({ scale: ts, rotation: rot });
-      const c = els[i].querySelector('canvas');
-      c.width = Math.floor(vp.width * DPR);
-      c.height = Math.floor(vp.height * DPR);
-      c.style.height = Math.floor(vp.height) + 'px';
-      let thumbTask = null;
-      await enqueueRender(async () => {
-        thumbTask = page.render({ canvasContext: c.getContext('2d'), viewport: vp, transform: DPR !== 1 ? [DPR, 0, 0, DPR, 0, 0] : undefined });
-        await Promise.race([
-          thumbTask.promise,
-          new Promise((_, rej) => setTimeout(() => rej(new Error('thumb-timeout')), 15000)),
-        ]);
-      });
-    } catch (err) {
-      if (err.message === 'thumb-timeout') console.warn('thumb ' + i + ' 超时，跳过');
-      else console.error('thumb', i, err);
-    }
-    if (gen !== thumbsGen) return;
-    els[i].classList.remove('loading');
+    await renderThumb(i);
   }
+}
+// 渲染单格缩略图（进串行队列 + 超时保护，卡死则跳过该缩略图）
+async function renderThumb(i) {
+  const el = thumbEls[i];
+  const slotObj = S.pageOrder[i];
+  if (!el || !slotObj) return;
+  try {
+    const page = await S.pdfDoc.getPage(slotObj.src + 1);
+    const rot = (page.rotate + slotObj.rot) % 360;
+    const v1 = page.getViewport({ scale: 1, rotation: rot });
+    const ts = Math.min(THUMB_W / v1.width, 0.42);
+    const vp = page.getViewport({ scale: ts, rotation: rot });
+    const c = el.querySelector('canvas');
+    c.width = Math.floor(vp.width * DPR);
+    c.height = Math.floor(vp.height * DPR);
+    c.style.height = Math.floor(vp.height) + 'px';
+    await enqueueRender(async () => {
+      const task = page.render({ canvasContext: c.getContext('2d'), viewport: vp, transform: DPR !== 1 ? [DPR, 0, 0, DPR, 0, 0] : undefined });
+      await Promise.race([
+        task.promise,
+        new Promise((_, rej) => setTimeout(() => rej(new Error('thumb-timeout')), 15000)),
+      ]);
+    });
+  } catch (err) {
+    if (err.message === 'thumb-timeout') console.warn('thumb ' + i + ' 超时，跳过');
+    else console.error('thumb', i, err);
+  }
+  el.classList.remove('loading');
 }
 async function rotateSlot(slot, d) {
   const slotObj = S.pageOrder[slot];
@@ -2106,7 +2118,7 @@ async function rotateSlot(slot, d) {
     if (S.zoomMode === 'fitw') fitWidth(); else if (S.zoomMode === 'fitp') fitPage();
   }
   renderPage(slot);
-  buildThumbs();
+  renderThumb(slot);
   markDirty();
 }
 async function moveSlot(from, to) {

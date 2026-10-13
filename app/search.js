@@ -1,6 +1,7 @@
 
 // ---------------- 搜索 ----------------
 let searching = false;
+let searchGen = 0; // 搜索代次：搜索中来了新查询就 ++，旧扫描见代次不符提前退出
 let searchQueued = null; // 搜索进行中到达的输入：{q, step} 排队待补搜（含回车跳转意图）
 let searchState = { q: '', results: [], cur: -1 };
 let searchCase = false, searchHLAll = true;
@@ -62,8 +63,9 @@ async function doSearch(q, step) {
   }
   // 上一次搜索还在跑：最新查询连同回车跳转意图一起排队，跑完自动补搜/跳转
   //（直接丢弃会让结果停在中间态；只排查询不排跳转会吞掉用户的 Enter）
-  if (searching) { searchQueued = { q, step: step || 0 }; return; }
+  if (searching) { searchGen++; searchQueued = { q, step: step || 0 }; return; } // 令旧扫描提前退出，跑完自动补搜
   searching = true;
+  const gen = ++searchGen;
   showSearchPanel(true);
   if ($('#sidebar').classList.contains('collapsed')) toggleSidebar();
   switchTab('results'); // 结果在侧栏页签里，搜索时切过去让用户看得见
@@ -72,6 +74,7 @@ async function doSearch(q, step) {
     const ql = searchCase ? q : q.toLowerCase();
     const results = [];
     for (let src = 0; src < S.pdfDoc.numPages && results.length < 300; src++) {
+      if (gen !== searchGen) return;
       const tc = await getTextContent(src);
       let str = '';
       const parts = []; // 每个文字项的字符区间，用于估算命中位置
@@ -88,6 +91,7 @@ async function doSearch(q, step) {
       }
       if (src % 8 === 7) await new Promise(r => setTimeout(r, 0));
     }
+    if (gen !== searchGen) return; // 最后一页处理期间来了新查询：本次结果作废
     searchState = { q, results, cur: -1 };
     renderResults();
     updateSearchCount();
