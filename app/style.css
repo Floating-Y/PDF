@@ -86,7 +86,6 @@ body {
 body.tauri #toolbar { padding-right: 152px; }
 .tb-group { display: flex; align-items: center; gap: 6px; }
 #toolbar > .tb-group { flex-wrap: wrap; min-width: 0; max-width: 100%; }
-.tb-group.grow { flex: 1; min-width: 110px; }
 .tb-sep { width: 1px; height: 24px; background: var(--line-strong); flex: none; }
 .tb-spacer { flex: 1; min-width: 20px; height: 1px; }
 
@@ -207,7 +206,7 @@ body.simple #toolFavorites .tool-label { display: inline; }
   width: 42px; text-align: center; font-size: 12.5px; font-family: inherit;
   background: transparent; border: none; border-radius: 6px;
   color: var(--txt); height: 24px; padding: 0;
-  appearance: textfield; -moz-appearance: textfield;
+  appearance: textfield;
 }
 #pageInput::-webkit-inner-spin-button, #pageInput::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 #pageInput:focus { background: var(--btn); outline: none; }
@@ -330,7 +329,6 @@ body.no-doc #sidebar { display: none; }
   display: inline-flex; align-items: center; justify-content: center;
 }
 #tab-results .rnav button:hover { background: var(--btn-hover); }
-#tab-results .rpos { font-size: 11px; color: var(--muted); min-width: 36px; text-align: center; font-variant-numeric: tabular-nums; }
 #tab-results .ritem {
   padding: 7px 12px; cursor: pointer; border-bottom: 1px solid var(--line);
   font-size: 12px; transition: background .15s;
@@ -369,10 +367,20 @@ body.no-doc #sidebar { display: none; }
 :root:not([data-theme="light"]) .thumb canvas { filter: brightness(.9); }
 #viewer canvas { display: block; }
 
-/* 文本层 / 标注层（功能性样式，勿改结构） */
-.textLayer { position: absolute; inset: 0; overflow: hidden; line-height: 1; opacity: 1; }
+/* 文本层 / 标注层（功能性样式，勿改结构）。基础规则取自 pdf.js viewer.css 的 .textLayer
+   段（Apache-2.0）：renderTextLayer 依赖 span 绝对定位/等宽空格/透明文字；
+   容器 transform-origin 供缩放过渡拉伸，z-index 保持 text < annotation 的叠放次序 */
+.textLayer {
+  position: absolute; inset: 0; overflow: hidden; line-height: 1; opacity: 1;
+  text-align: initial; -webkit-text-size-adjust: none; text-size-adjust: none;
+  forced-color-adjust: none; transform-origin: 0 0; z-index: 2;
+}
+.textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
+/* Chrome 专用修正（pdf.js#14205）：markedContent 包裹 span 不参与布局 */
+.textLayer span.markedContent { top: 0; height: 0; }
 .textLayer ::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
-.annotationLayer { position: absolute; inset: 0; pointer-events: none; }
+.textLayer br::selection { background: transparent; }
+.annotationLayer { position: absolute; inset: 0; pointer-events: none; transform-origin: 0 0; z-index: 3; }
 .annotationLayer svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .annotationLayer svg * { pointer-events: none; }
 .ann-text { position: absolute; pointer-events: auto; overflow: visible; white-space: pre-wrap; line-height: 1.25; padding: 1px 3px; outline: none; }

@@ -3,6 +3,7 @@
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import assert from 'node:assert/strict';
+import { connectCdp } from './cdp.mjs';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..').replace(/\\/g, '/');
 const BASE = process.env.CDP_BASE || 'http://127.0.0.1:9222';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -11,20 +12,9 @@ const wsUrl = (await (await fetch(BASE + '/json')).json())
   .find(t => t.type === 'page' && /index\.html/.test(t.url))?.webSocketDebuggerUrl;
 if (!wsUrl) throw new Error('app page not found');
 
-const ws = new WebSocket(wsUrl);
-await new Promise((res, rej) => { ws.addEventListener('open', res); ws.addEventListener('error', rej); });
-let seq = 0;
-const pend = new Map();
-ws.addEventListener('message', ev => {
-  const m = JSON.parse(ev.data);
-  if (pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); }
-});
-const send = (method, params = {}) => new Promise(r => { const i = ++seq; pend.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
-const evalp = async expr => {
-  const r = await send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true });
-  if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
-  return r.result?.result?.value;
-};
+const cdp = await connectCdp(wsUrl);
+const send = (method, params = {}) => cdp.send(method, params);
+const evalp = expr => cdp.eval(expr);
 
 const dataPath = await evalp('window.__TAURI__.path.appLocalDataDir()');
 assert(dataPath.replace(/\\/g, '/').toLowerCase().startsWith(ROOT.toLowerCase() + '/src-tauri/target/'),
@@ -110,5 +100,5 @@ const misc = await evalp(`(() => {
 })()`);
 console.log(JSON.stringify(misc));
 
-ws.close();
+cdp.ws.close();
 process.exit(0);

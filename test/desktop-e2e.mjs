@@ -7,6 +7,7 @@ import { cpSync, existsSync, rmSync, writeFileSync } from 'fs';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { join, dirname, resolve } from 'path';
+import { connectCdp } from './cdp.mjs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // openPath 在 WebView 里需要磁盘绝对路径；统一正斜杠，便于与 S.srcPath 回读值比较
 const ROOT = resolve(__dirname, '..').replace(/\\/g, '/');
@@ -28,46 +29,6 @@ async function findPageWs(retries = 20) {
   throw new Error('app page not found on CDP ' + BASE);
 }
 
-class Cdp {
-  constructor(ws) {
-    this.ws = ws; this.id = 0; this.pending = new Map();
-    ws.addEventListener('message', ev => {
-      const m = JSON.parse(ev.data);
-      if (m.id && this.pending.has(m.id)) {
-        const { res, rej } = this.pending.get(m.id);
-        this.pending.delete(m.id);
-        m.error ? rej(new Error(m.error.message)) : res(m.result);
-      }
-    });
-  }
-  send(method, params = {}) {
-    return new Promise((res, rej) => {
-      const id = ++this.id;
-      this.pending.set(id, { res, rej });
-      this.ws.send(JSON.stringify({ id, method, params }));
-    });
-  }
-  async eval(expr) {
-    const r = await this.send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true });
-    if (r.exceptionDetails) throw new Error('page exception: ' + JSON.stringify(r.exceptionDetails.exception?.description || r.exceptionDetails));
-    return r.result.value;
-  }
-  mouse(type, x, y, button = 'left', count = 1) {
-    return this.send('Input.dispatchMouseEvent', { type, x, y, button, clickCount: count });
-  }
-  async click(selector, text = '') {
-    const point = await this.eval(`(() => {
-      const element = [...document.querySelectorAll(${JSON.stringify(selector)})]
-        .find(element => element.textContent.includes(${JSON.stringify(text)}));
-      const rect = element?.getBoundingClientRect();
-      return rect?.width && rect.height ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
-    })()`);
-    if (!point) throw new Error('点击目标不可见：' + selector + ' ' + text);
-    await this.mouse('mousePressed', point.x, point.y);
-    await this.mouse('mouseReleased', point.x, point.y);
-  }
-}
-
 const results = [];
 const check = (name, ok, detail = '') => {
   results.push({ name, ok });
@@ -75,9 +36,7 @@ const check = (name, ok, detail = '') => {
   if (!ok) process.exitCode = 1;
 };
 
-const ws = new WebSocket(await findPageWs());
-await new Promise((res, rej) => { ws.addEventListener('open', res); ws.addEventListener('error', rej); });
-const cdp = new Cdp(ws);
+const cdp = await connectCdp(await findPageWs());
 const waitFor = async (expression, timeoutMs = 10000) => {
   for (let elapsed = 0; elapsed < timeoutMs; elapsed += 200) {
     if (await cdp.eval(expression)) return true;
@@ -103,7 +62,7 @@ check('pdf.js 已加载', await cdp.eval('!!window.pdfjsLib'));
 
 const dataPath = await cdp.eval('window.__TAURI__.path.appLocalDataDir()');
 if (!dataPath.replace(/\\/g, '/').toLowerCase().startsWith(ROOT.toLowerCase() + '/src-tauri/target/')) {
-  ws.close();
+  cdp.ws.close();
   throw new Error('拒绝清除日常会话：请先用 test/tauri-e2e.json 构建隔离测试实例');
 }
 
@@ -459,4 +418,4 @@ check(expectedPid === null ? '关闭按钮关闭 WebView' : '关闭按钮退出�
   expectedPid === null ? '' : `pid ${expectedPid}`);
 
 console.log(process.exitCode ? '\n有失败项' : '\n全部通过');
-ws.close();
+cdp.ws.close();

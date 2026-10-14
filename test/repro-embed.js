@@ -6,6 +6,9 @@ const vm = require('vm');
 const PDFLib = require('../vendor/pdf-lib.min.js');
 const fontkit = require('../vendor/fontkit.min.js');
 const pdfjs = require('../vendor/pdf.min.js');
+// 浏览器端在 app.js 显式设了 workerSrc；Node 下 pdf.js 默认回退 require('./pdf.worker.js')，
+// 那个文件已删（与 min 版字节重复），这里同样显式指向 min worker。
+pdfjs.GlobalWorkerOptions.workerSrc = path.join(__dirname, '../vendor/pdf.worker.min.js');
 const { FONT_MAP } = require('../app/textedit.js');
 const ROOT = path.resolve(__dirname, '..');
 const FONT_DATA = new Uint8Array(Buffer.from(

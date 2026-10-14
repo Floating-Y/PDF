@@ -8,6 +8,7 @@ import { existsSync, rmSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
+import { connectCdp } from './cdp.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PDFPRO_E2E_PORT) || 5199, CDP_PORT = 9224;
@@ -66,34 +67,7 @@ try {
     } catch (e) {}
   }
   if (!wsUrl) throw new Error('CDP 未就绪');
-  const ws = new WebSocket(wsUrl);
-  await new Promise((res, rej) => { ws.addEventListener('open', res); ws.addEventListener('error', rej); });
-  const cdp = {
-    id: 0, pending: new Map(),
-    send(method, params = {}) {
-      return new Promise((res, rej) => {
-        const id = ++this.id;
-        this.pending.set(id, { res, rej });
-        ws.send(JSON.stringify({ id, method, params }));
-      });
-    },
-    async eval(expr) {
-      const r = await this.send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true });
-      if (r.exceptionDetails) throw new Error('page exception: ' + (r.exceptionDetails.exception?.description || JSON.stringify(r.exceptionDetails)));
-      return r.result.value;
-    },
-    mouse(type, x, y, button = 'left', count = 1, modifiers = 0) {
-      return this.send('Input.dispatchMouseEvent', { type, x, y, button, clickCount: count, modifiers });
-    },
-  };
-  ws.addEventListener('message', ev => {
-    const m = JSON.parse(ev.data);
-    if (m.id && cdp.pending.has(m.id)) {
-      const { res, rej } = cdp.pending.get(m.id);
-      cdp.pending.delete(m.id);
-      m.error ? rej(new Error(m.error.message)) : res(m.result);
-    }
-  });
+  const cdp = await connectCdp(wsUrl);
   // 轮询等待页面表达式为真（缩放重渲染有 150ms 防抖 + 渲染耗时）
   const waitFor = async (expr, ms = 5000) => {
     for (let i = 0; i < ms / 200; i++) {
