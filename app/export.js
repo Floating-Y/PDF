@@ -287,11 +287,8 @@ async function saveBytes(bytes, name) {
     toast('已导出：' + handle.name);
     return true;
   }
-  const blob = new Blob([bytes], { type: 'application/pdf' });
-  const url = URL.createObjectURL(blob);
-  const a = $('#downloadLink');
-  a.href = url;
-  a.download = name;
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: name });
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
   toast('已下载：' + name);

@@ -191,7 +191,8 @@ async function openFile(file, handle = null, handleItem = null, savedReload = fa
   let pwCancelled = false; // try 内声明 catch 拿不到，放外面
   try {
     if (!handle && handleItem) {
-      try { const h = await handleItem.getAsFileSystemHandle(); if (h && h.kind === 'file') handle = h; } catch (e) {}
+      try { handle = await handleItem.getAsFileSystemHandle(); } catch (e) {}
+      if (handle?.kind !== 'file') handle = null;
     }
     const bytes = new Uint8Array(await file.arrayBuffer());
     const sessionKey = await sessKey(file.name, bytes, handle && handle.path);
@@ -216,7 +217,7 @@ async function openFile(file, handle = null, handleItem = null, savedReload = fa
     await saveSession();
     if (savingPdf && !savedReload) { await doc.destroy(); toast('正在保存，请稍后再打开文件'); return false; }
     clearTimeout(sessionSaveTimer);
-    if (S.pdfDoc) { try { S.pdfDoc.destroy(); } catch (e) {} } // 释放旧文档及其 worker，防止累积拖慢渲染
+    try { S.pdfDoc?.destroy(); } catch (e) {} // 释放旧文档及其 worker，防止累积拖慢渲染
     S.gen++;
     cancelAllRenders();
     if (io) io.disconnect();
@@ -447,6 +448,26 @@ function renderPage(slot) {
   return enqueueRender(() => doRenderPage(slot));
 }
 
+// 竞速超时：p 在 ms 内未落定则 reject(msg)，防单个任务挂死整条渲染队列
+const withTimeout = (p, ms, msg = 'timeout') =>
+  Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(msg)), ms))]);
+// 取消任务并等它落定（cancel 后 promise 会 reject，需吞掉），上限 ms 防挂死
+async function dropTask(task, ms) {
+  try { task.cancel(); await withTimeout(task.promise, ms); } catch (e) {}
+}
+
+// 渲染连续超时后的自愈：4s 后若该页仍可见且无渲染任务则重试（每页最多 5 次）
+function scheduleSlotRetry(slot) {
+  const n = (slotRetries.get(slot) || 0) + 1;
+  slotRetries.set(slot, n);
+  if (n > 5) return;
+  setTimeout(() => {
+    if (!S.pdfDoc || !pageEls[slot] || renderTasks.has(slot)) return;
+    const r = pageEls[slot].getBoundingClientRect(), vr = viewer.getBoundingClientRect();
+    if (r.bottom > vr.top && r.top < vr.bottom) renderPage(slot);
+  }, 4000);
+}
+
 async function doRenderPage(slot) {
   if (!S.pdfDoc) return;
   const gen = S.gen;
@@ -476,56 +497,34 @@ async function doRenderPage(slot) {
     off.height = Math.floor(viewport.height * DPR);
     const inner = pageEl.querySelector('.page-inner');
     inner.style.setProperty('--scale-factor', viewport.scale);
-    // 渲染带超时自愈：卡死 → 取消 → 重试（最多 3 次）
-    let task = page.render({
-      canvasContext: off.getContext('2d'),
-      viewport,
+    // 渲染带超时自愈：卡死 → 取消 → 重试（最多 3 次，仍败则交给 scheduleSlotRetry 延迟重试）
+    const startTask = () => page.render({
+      canvasContext: off.getContext('2d'), viewport,
       transform: DPR !== 1 ? [DPR, 0, 0, DPR, 0, 0] : undefined,
     });
+    let task = startTask();
     renderTasks.set(slot, { render: task });
     let painted = false;
     for (let attempt = 0; attempt < 3 && !painted; attempt++) {
-      try {
-        await Promise.race([
-          task.promise,
-          new Promise((_, rej) => setTimeout(() => rej(new Error('render-timeout')), 20000)),
-        ]);
-        painted = true;
-        slotRetries.delete(slot);
-      } catch (e) {
-        if (e.message !== 'render-timeout') {
-          if (!/cancel/i.test(String(e?.name || e))) console.error(e);
-          renderTasks.delete(slot);
-          return;
-        }
-        console.warn('render slot ' + slot + ' 超时，取消重试');
-        try { task.cancel(); await Promise.race([task.promise, new Promise(r => setTimeout(r, 3000))]); } catch (e2) {}
-        if (S.gen !== gen) return;
-        if (attempt < 2) {
-          task = page.render({
-            canvasContext: off.getContext('2d'),
-            viewport,
-            transform: DPR !== 1 ? [DPR, 0, 0, DPR, 0, 0] : undefined,
-          });
-          renderTasks.set(slot, { render: task });
-        } else {
-          console.error('render slot ' + slot + ' 连续超时，放弃（稍后自动重试）');
-          renderTasks.delete(slot);
-          const n = (slotRetries.get(slot) || 0) + 1;
-          slotRetries.set(slot, n);
-          if (n <= 5) {
-            setTimeout(() => {
-              if (!S.pdfDoc || !pageEls[slot] || renderTasks.has(slot)) return;
-              const r = pageEls[slot].getBoundingClientRect();
-              const vr = viewer.getBoundingClientRect();
-              if (r.bottom > vr.top && r.top < vr.bottom) renderPage(slot);
-            }, 4000);
-          }
-          return;
-        }
+      const err = await withTimeout(task.promise, 20000, 'render-timeout').then(() => null, e => e);
+      if (!err) { painted = true; slotRetries.delete(slot); continue; }
+      if (err.message !== 'render-timeout') { // 取消或其它错误：放弃本页
+        if (!/cancel/i.test(String(err?.name || err))) console.error(err);
+        renderTasks.delete(slot);
+        return;
       }
+      console.warn('render slot ' + slot + ' 超时，取消重试');
+      await dropTask(task, 3000);
+      if (S.gen !== gen) return;
+      if (attempt < 2) { task = startTask(); renderTasks.set(slot, { render: task }); }
     }
     if (S.gen !== gen) return;
+    if (!painted) {
+      console.error('render slot ' + slot + ' 连续超时，放弃（稍后自动重试）');
+      renderTasks.delete(slot);
+      scheduleSlotRetry(slot);
+      return;
+    }
     // 清晰位图就绪：一次性换上，并清掉缩放期间的占位拉伸
     const canvas = pageEl.querySelector('canvas');
     canvas.width = off.width;
@@ -542,14 +541,10 @@ async function doRenderPage(slot) {
     tl.textContent = '';
     const tlt = pdfjsLib.renderTextLayer({ textContentSource: tc, container: tl, viewport });
     renderTasks.set(slot, { render: task, text: tlt });
-    try {
-      await Promise.race([
-        tlt.promise,
-        new Promise((_, rej) => setTimeout(() => rej(new Error('textlayer-timeout')), 15000)),
-      ]);
-    } catch (e) {
+    const terr = await withTimeout(tlt.promise, 15000, 'textlayer-timeout').then(() => null, e => e);
+    if (terr) {
       try { tlt.cancel(); } catch (e2) {}
-      if (e.message === 'textlayer-timeout') console.warn('textLayer slot ' + slot + ' 超时，跳过（滚动后再进会重试）');
+      if (terr.message === 'textlayer-timeout') console.warn('textLayer slot ' + slot + ' 超时，跳过（滚动后再进会重试）');
     }
     if (S.gen !== gen) return;
     renderAnnotations(slot);
@@ -642,8 +637,7 @@ function renderAnnotations(slot) {
         texts.push(`<div class="ann-text${sel}" data-ann-id="${a.id}" contenteditable="false" style="left:${vx}px;top:${vy}px;${rotCss}font-size:${sizePx}px;line-height:1.25;color:${a.color};font-family:${f.css};font-weight:${fw};font-style:${fst};padding:0;white-space:pre">${esc(a.text || '')}</div>`);
       } else {
         // 提交后的常态：按原始 run 结构渲染，位置/字体与原文一致
-        for (const r of a.runs) {
-          if (!r.cur) continue;
+        for (const r of a.runs.filter(r => r.cur)) {
           const [vx, vy] = tl([r.x, r.baselineY]);
           const sizePx = r.size * sc;
           const f = runFaceCss(r.fontName ? embeddedFaceCache.get(r.fontName) : null, a.fontKey, r.cur, sizePx);
@@ -952,12 +946,8 @@ function hitAnnAt(e, slot) {
     } else if (a.type === 'ink') {
       // 折线：点到任一线段的距离小于线宽/2 + 余量即命中
       const th = (a.sw || 2.5) / 2 + 2;
-      for (let k = 1; k < a.points.length; k++) {
-        const [x1, y1] = a.points[k - 1], [x2, y2] = a.points[k];
-        const dx = x2 - x1, dy = y2 - y1, L2 = dx * dx + dy * dy;
-        const t = L2 ? Math.max(0, Math.min(1, ((p[0] - x1) * dx + (p[1] - y1) * dy) / L2)) : 0;
-        if (Math.hypot(p[0] - (x1 + t * dx), p[1] - (y1 + t * dy)) <= th) return { dataset: { annId: a.id } };
-      }
+      const hit = a.points.some((q, k) => k && segDist(p, a.points[k - 1], q) <= th);
+      if (hit) return { dataset: { annId: a.id } };
     } else if (inBox(a.x1, a.y1, a.x2, a.y2)) { // rect / edit / text 都是包围盒
       return { dataset: { annId: a.id } };
     }
@@ -1109,11 +1099,12 @@ function columnWrapWidth(slot, ann) {
     let l = null, r = null;
     for (const rc of rects) {
       if (l === null) {
-        if (Math.abs(rc.left - left) < 5) { l = rc.left; r = rc.right; }
+        if (Math.abs(rc.left - left) >= 5) continue; // 只从与本行左缘对齐的 span 起算
+        l = rc.left; r = rc.right;
         continue;
       }
-      if (rc.left - r <= rc.height * 1.5) r = Math.max(r, rc.right);
-      else break;
+      if (rc.left - r > rc.height * 1.5) break; // 间距过大 = 已到下一栏
+      r = Math.max(r, rc.right);
     }
     if (l !== null) best = Math.max(best, (r - l) / S.scale);
   }
@@ -1606,56 +1597,23 @@ function startEditing(id, opts) {
     el.contentEditable = 'false';
     el.classList.remove('editing');
     const ann = annOf(id);
-    if (ann) {
-      const text = el.innerText.replace(/\n+$/, '');
-      const before = JSON.parse(JSON.stringify(ann));
-      if (ann.type === 'edit') {
-        // 改字：清空 = 纯涂白（删除原文）；不改包围盒，涂白面积不随新文字缩小
-        ann.text = text;
-        // 原位保留 run 结构的前提：从未重排过、无手动换行、diff 对得上且没有 run 变长
-        //（trim 后比较：run 吸收相邻间隙空格不算变长）；否则整行按折行宽度重排，
-        // 每个折行点一个 run，与编辑态所见一致
-        if (ann.wrapped || !ann.runs || !ann.runs.length || text.includes('\n') ||
-            !alignRunsByDiff(ann, text) ||
-            ann.runs.some(r => r.cur.trim().length > r.str.trim().length)) {
-          layoutWrapped(ann, text, slot);
-        }
-        if (text === ann.origText) {
-          // 改回原文 = 撤销这次编辑（涂白无意义，移除标注）
-          if (before.text !== before.origText) {
-            // 此前已有改动的编辑被改回原文：可撤销的移除
-            pushHistory({
-              undo() { readdAnns([ann]); },
-              redo() { removeAnn(ann.id); },
-            });
-          }
-          removeAnn(id);
-          S.selectedId = null;
-        } else if (text !== before.text) {
-          const after = JSON.parse(JSON.stringify(ann));
-          pushHistory({
-            undo() { Object.assign(ann, JSON.parse(JSON.stringify(before))); renderAnnotationsBySrc(ann.page); },
-            redo() { Object.assign(ann, JSON.parse(JSON.stringify(after))); renderAnnotationsBySrc(ann.page); },
-          });
-        }
-        S.editingId = null; // 先退出编辑态，渲染才会走 run 结构分支
-        renderAnnotations(slot);
-      } else if (!text.trim()) {
-        removeAnn(id);
-        S.selectedId = null;
-      } else {
-        ann.text = text;
-        const ir = pageEls[slot].querySelector('.page-inner').getBoundingClientRect();
-        const r = el.getBoundingClientRect();
-        ann.x2 = ann.x1 + r.width / S.scale;
-        ann.y1 = ann.y2 - r.height / S.scale;
-        const after = JSON.parse(JSON.stringify(ann));
-        pushHistory({
-          undo() { Object.assign(ann, JSON.parse(JSON.stringify(before))); renderAnnotationsBySrc(ann.page); },
-          redo() { Object.assign(ann, JSON.parse(JSON.stringify(after))); renderAnnotationsBySrc(ann.page); },
-        });
-        renderAnnotations(slot);
-      }
+    if (!ann) { S.editingId = null; return; }
+    const text = el.innerText.replace(/\n+$/, '');
+    const before = JSON.parse(JSON.stringify(ann));
+    if (ann.type === 'edit') commitEdit(ann, id, text, before, slot);
+    else if (!text.trim()) { removeAnn(id); S.selectedId = null; }
+    else {
+      ann.text = text;
+      const ir = pageEls[slot].querySelector('.page-inner').getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      ann.x2 = ann.x1 + r.width / S.scale;
+      ann.y1 = ann.y2 - r.height / S.scale;
+      const after = JSON.parse(JSON.stringify(ann));
+      pushHistory({
+        undo() { Object.assign(ann, JSON.parse(JSON.stringify(before))); renderAnnotationsBySrc(ann.page); },
+        redo() { Object.assign(ann, JSON.parse(JSON.stringify(after))); renderAnnotationsBySrc(ann.page); },
+      });
+      renderAnnotations(slot);
     }
     S.editingId = null;
   };
@@ -1665,6 +1623,34 @@ function startEditing(id, opts) {
   };
   el.addEventListener('blur', commit);
   el.addEventListener('keydown', onKey);
+}
+
+// 改字提交：清空 = 纯涂白（删除原文）；不改包围盒，涂白面积不随新文字缩小。
+// 原位保留 run 结构的前提：从未重排过、无手动换行、diff 对得上且没有 run 变长
+//（trim 后比较：run 吸收相邻间隙空格不算变长）；否则整行按折行宽度重排，
+// 每个折行点一个 run，与编辑态所见一致
+function commitEdit(ann, id, text, before, slot) {
+  ann.text = text;
+  if (ann.wrapped || !ann.runs?.length || text.includes('\n') ||
+      !alignRunsByDiff(ann, text) ||
+      ann.runs.some(r => r.cur.trim().length > r.str.trim().length)) {
+    layoutWrapped(ann, text, slot);
+  }
+  if (text === ann.origText) {
+    // 改回原文 = 撤销这次编辑（涂白无意义，移除标注）；此前已有改动的编辑被改回：可撤销的移除
+    if (before.text !== before.origText)
+      pushHistory({ undo() { readdAnns([ann]); }, redo() { removeAnn(ann.id); } });
+    removeAnn(id);
+    S.selectedId = null;
+  } else if (text !== before.text) {
+    const after = JSON.parse(JSON.stringify(ann));
+    pushHistory({
+      undo() { Object.assign(ann, JSON.parse(JSON.stringify(before))); renderAnnotationsBySrc(ann.page); },
+      redo() { Object.assign(ann, JSON.parse(JSON.stringify(after))); renderAnnotationsBySrc(ann.page); },
+    });
+  }
+  S.editingId = null; // 先退出编辑态，渲染才会走 run 结构分支
+  renderAnnotations(slot);
 }
 
 // 删除标注
@@ -2097,10 +2083,7 @@ async function renderThumb(i) {
     c.style.height = Math.floor(vp.height) + 'px';
     await enqueueRender(async () => {
       const task = page.render({ canvasContext: c.getContext('2d'), viewport: vp, transform: DPR !== 1 ? [DPR, 0, 0, DPR, 0, 0] : undefined });
-      await Promise.race([
-        task.promise,
-        new Promise((_, rej) => setTimeout(() => rej(new Error('thumb-timeout')), 15000)),
-      ]);
+      await withTimeout(task.promise, 15000, 'thumb-timeout');
     });
   } catch (err) {
     if (err.message === 'thumb-timeout') console.warn('thumb ' + i + ' 超时，跳过');

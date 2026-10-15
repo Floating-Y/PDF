@@ -6,9 +6,8 @@ const path = require('path');
 const ROOT = __dirname;
 const PORT = Number(process.argv[2]) || 5173;
 const MIME = {
-  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript',
-  '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
-  '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.pdf': 'application/pdf', '.woff2': 'font/woff2',
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript',
+  '.css': 'text/css', '.json': 'application/json', '.pdf': 'application/pdf',
 };
 
 // 应用资源与开发用 PDF 夹具可访问，其余仓库文件不对浏览器公开。
