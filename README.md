@@ -51,7 +51,8 @@ keep the first backup. The browser server listens only on `127.0.0.1`.
   the PDF's own embedded font so the result is indistinguishable from the original.
 - **Pages** — rotate or delete pages via "⋯ → Page actions"; reorder them in the
   thumbnail sidebar, opened from "⋯ → Reading & interface → Pages & outline"
-  (takes effect on export).
+  (takes effect on export). Page deletions, rotations and reorders are undoable
+  with Ctrl+Z.
 - **Export** — "💾 Export" saves a new PDF with all changes baked in; the original
   file is untouched. The exported file keeps the original's bookmarks, form
   fields and file metadata (bookmarks pointing at deleted pages are simply

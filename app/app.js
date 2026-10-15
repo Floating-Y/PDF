@@ -1681,28 +1681,29 @@ function deleteSelected() {
 }
 
 // ---------------- 页面操作 ----------------
-async function rotateCurrent(d) {
-  const slot = S.currentSlot;
-  const slotObj = S.pageOrder[slot];
-  if (!slotObj) return;
-  slotObj.rot = (slotObj.rot + d + 360) % 360;
-  S.slotDims.delete(slot);
-  await ensureDims(slot);
-  setPageInnerSize(slot);
-  if (S.zoomMode === 'fitw') fitWidth(); else if (S.zoomMode === 'fitp') fitPage(); // 旋转改变宽高，适应模式需重算
-  renderPage(slot);
-  renderThumb(slot);
-  markDirty();
+// 页面级撤销：快照整个 pageOrder（页操作不碰标注，标注按 src 自动跟随显隐）
+const snapshotPageOrder = () => S.pageOrder.map(s => ({ src: s.src, rot: s.rot }));
+function restorePageOrder(order, preserveSlot) {
+  S.pageOrder = order.map(s => ({ src: s.src, rot: s.rot }));
+  buildViewer(Math.min(preserveSlot, S.pageOrder.length - 1));
+}
+function pushPageOrderHistory(before, preserveSlot) {
+  const after = snapshotPageOrder();
+  pushHistory({
+    undo() { restorePageOrder(before, preserveSlot); },
+    redo() { restorePageOrder(after, preserveSlot); },
+  });
 }
 
 async function deletePageAt(slot) {
   if (S.pageOrder.length <= 1) { toast('至少要保留一页'); return; }
   if (!S.pageOrder[slot]) return;
-  if (!confirm(`确定删除第 ${slot + 1} 页？（导出后生效，此操作不可撤销）`)) return;
+  const before = snapshotPageOrder();
   S.pageOrder.splice(slot, 1);
-  markDirty();
-  await buildViewer(Math.min(slot, S.pageOrder.length - 1));
-  toast('已删除该页（导出时生效）');
+  const preserve = Math.min(slot, S.pageOrder.length - 1);
+  pushPageOrderHistory(before, preserve);
+  await buildViewer(preserve);
+  toast(`已删除第 ${slot + 1} 页（导出时生效，Ctrl+Z 可撤销）`);
 }
 
 // ---------------- 缩放 / 翻页 ----------------
@@ -1850,9 +1851,9 @@ function openMoreMenu(section = null) {
   } else if (section === 'pages') {
     items = [
       { label: '页面与目录侧栏', disabled: !S.pdfDoc, onClick: () => { switchTab('thumbs'); if ($('#sidebar').classList.contains('collapsed')) toggleSidebar(); } },
-      { label: '向左旋转当前页', disabled: !S.pdfDoc, onClick: () => rotateCurrent(-90) },
-      { label: '向右旋转当前页', disabled: !S.pdfDoc, onClick: () => rotateCurrent(90) },
-      { label: '删除当前页…', disabled: !S.pdfDoc, danger: true, onClick: () => deletePageAt(S.currentSlot) },
+      { label: '向左旋转当前页', disabled: !S.pdfDoc, onClick: () => rotateSlot(S.currentSlot, -90) },
+      { label: '向右旋转当前页', disabled: !S.pdfDoc, onClick: () => rotateSlot(S.currentSlot, 90) },
+      { label: '删除当前页', disabled: !S.pdfDoc, danger: true, onClick: () => deletePageAt(S.currentSlot) },
       { label: '打印…', disabled: !S.pdfDoc, onClick: printPdf },
     ];
   } else {
@@ -1932,7 +1933,7 @@ document.addEventListener('contextmenu', e => {
     { label: '向左旋转本页', onClick: () => rotateSlot(slot, -90) },
     { label: '向右旋转本页', onClick: () => rotateSlot(slot, 90) },
     'sep',
-    { label: '删除本页…', danger: true, onClick: () => deletePageAt(slot) },
+    { label: '删除本页', danger: true, onClick: () => deletePageAt(slot) },
     'sep',
     { label: '打印…', onClick: printPdf },
   ]);
@@ -2092,6 +2093,7 @@ async function renderThumb(i) {
   el.classList.remove('loading');
 }
 async function rotateSlot(slot, d) {
+  const before = snapshotPageOrder();
   const slotObj = S.pageOrder[slot];
   slotObj.rot = (slotObj.rot + d + 360) % 360;
   S.slotDims.delete(slot);
@@ -2102,15 +2104,15 @@ async function rotateSlot(slot, d) {
   }
   renderPage(slot);
   renderThumb(slot);
-  markDirty();
+  pushPageOrderHistory(before, S.currentSlot);
 }
 async function moveSlot(from, to) {
+  const before = snapshotPageOrder();
   const [s] = S.pageOrder.splice(from, 1);
   S.pageOrder.splice(to, 0, s);
-  const cur = S.currentSlot;
-  await buildViewer(cur);
-  markDirty();
-  toast(`已把第 ${from + 1} 页移到第 ${to + 1} 页（导出时生效）`);
+  pushPageOrderHistory(before, S.currentSlot);
+  await buildViewer(S.currentSlot);
+  toast(`已把第 ${from + 1} 页移到第 ${to + 1} 页（导出时生效，Ctrl+Z 可撤销）`);
 }
 
 // ---------------- 目录 ----------------

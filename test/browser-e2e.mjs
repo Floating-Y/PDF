@@ -499,15 +499,28 @@ try {
   const deletedTail = await cdp.eval(`(async () => {
     closeMenu();
     S.anns.clear(); S.history = []; S.redo = [];
-    const confirmOriginal = window.confirm;
-    window.confirm = () => true;
-    try { await deletePageAt(S.pageOrder.length - 1); }
-    finally { window.confirm = confirmOriginal; }
+    await deletePageAt(S.pageOrder.length - 1);
     await saveSession();
     const session = await idbOp('readonly', S.sessionKey);
     return { pages: S.pageOrder.length, savedPages: session?.pageOrder.length, sourcePages: session?.sourcePages, dirty };
   })()`);
   check('仅删除尾页也保存恢复记录', deletedTail.pages === 19 && deletedTail.savedPages === 19 && deletedTail.sourcePages === 20 && deletedTail.dirty, JSON.stringify(deletedTail));
+
+  // 页面操作撤销：删页 / 旋转都能 Ctrl+Z 恢复，回到原样时未导出标记清除
+  const pageUndo = await cdp.eval(`(async () => {
+    undoLast(); // 先撤销上一节的尾页删除，回到完整 20 页
+    const pages0 = S.pageOrder.length;
+    await deletePageAt(1);
+    const pagesAfterDelete = S.pageOrder.length;
+    undoLast();
+    await rotateSlot(1, 90);
+    const rotAfterRotate = S.pageOrder[1].rot;
+    undoLast();
+    return { pages0, pagesAfterDelete, pagesRestored: S.pageOrder.length,
+      rotAfterRotate, rotRestored: S.pageOrder[1].rot, dirtyRestored: dirty };
+  })()`);
+  check('删页后可撤销恢复页数', pageUndo.pages0 === 20 && pageUndo.pagesAfterDelete === 19 && pageUndo.pagesRestored === 20, JSON.stringify(pageUndo));
+  check('旋转后可撤销归零且标记清除', pageUndo.rotAfterRotate === 90 && pageUndo.rotRestored === 0 && pageUndo.dirtyRestored === false, JSON.stringify(pageUndo));
 
   console.log(process.exitCode ? '\n有失败项' : '\n全部通过');
 } catch (err) {

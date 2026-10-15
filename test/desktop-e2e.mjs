@@ -300,8 +300,8 @@ check('二次写回仍保留首次备份', backup.readFileSync(join(__dirname, '
 
 // 6c. 适应宽度下旋转当前页必须重算缩放（P3 回归）
 const rot = await cdp.eval(`(async () => { fitWidth(); await new Promise(r=>setTimeout(r,300));
-  const s1 = S.scale; await rotateCurrent(90); await new Promise(r=>setTimeout(r,600));
-  const s2 = S.scale; await rotateCurrent(-90); await new Promise(r=>setTimeout(r,400));
+  const s1 = S.scale; await rotateSlot(S.currentSlot, 90); await new Promise(r=>setTimeout(r,600));
+  const s2 = S.scale; await rotateSlot(S.currentSlot, -90); await new Promise(r=>setTimeout(r,400));
   return { s1, s2, mode: S.zoomMode }; })()`);
 check('适应宽度下旋转重算缩放', rot.mode === 'fitw' && Math.abs(rot.s2 - rot.s1) > 0.01, JSON.stringify(rot));
 
