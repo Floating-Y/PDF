@@ -122,12 +122,12 @@ function printBytes(bytes) {
 const fontBytesCache = new Map(); // 字体文件 -> 字节：重复导出不再重新 fetch（Noto 有十几 MB）
 
 async function buildExportBytes() {
-  const src = await PDFLib.PDFDocument.load(S.srcBytes);
-  const out = await PDFLib.PDFDocument.create();
-  const copied = await out.copyPages(src, S.pageOrder.map(s => s.src));
-
-  const helv = await out.embedFont(PDFLib.StandardFonts.Helvetica);
+  // 原地修改而不是 copyPages 重建：书签 / 表单 / 附件 / 文档元数据这些目录级结构
+  // 随原文保留（重建文档没有它们）。代价：被删页的对象仍会序列化（体积不减），
+  // 指向被删页的书签 / 表单引用悬空——查看器会优雅忽略。
+  const out = await PDFLib.PDFDocument.load(S.srcBytes, { updateMetadata: false });
   out.registerFontkit(fontkit);
+  const helv = await out.embedFont(PDFLib.StandardFonts.Helvetica);
   // 按标注映射收集需要的系统字体并逐个嵌入（失败降级 Helvetica）
   const needed = new Set();
   for (const list of S.anns.values()) for (const a of list) {
@@ -148,38 +148,26 @@ async function buildExportBytes() {
     }
   }
   // 复用 PDF 内嵌的原字体程序（按 页面:字体名 收集）：替换文字用原字形
-  const embeddedFonts = new Map(); // "src:fontName" -> PDFFont
-  const embeddedFk = new Map();    // "src:fontName" -> fontkit font（字形覆盖检查）
-  for (const list of S.anns.values()) for (const a of list) {
-    if (a.type !== 'edit' || !a.text) continue;
-    const fns = new Set();
-    if (a.runs) a.runs.forEach(r => { if (r.fontName && r.cur) fns.add(r.fontName); });
-    else if (a.fontName) fns.add(a.fontName);
-    for (const fn of fns) {
-      const key = a.page + ':' + fn;
-      if (embeddedFonts.has(key)) continue;
-      const data = await getEmbeddedFontData(a.page, fn);
-      if (!data) continue;
-      try {
-        embeddedFonts.set(key, await out.embedFont(data, { subset: true }));
-        embeddedFk.set(key, fontkit.create(data));
-      } catch (e) {
-        console.error('embedded font re-embed failed', fn, e);
-      }
-    }
-  }
+  const embeddedFonts = new Map(), embeddedFk = new Map();
+  await collectEmbeddedFonts(out, embeddedFonts, embeddedFk);
 
-  const origRots = new Map();
+  // 页序 / 删页：把页面列表重排成 pageOrder 的 src 序列（remove+insert 与 pageOrder
+  // 的 splice 语义一致）；不在序列里的页 = 已删页，收尾移除
+  const bySrc = new Map(out.getPages().map((p, i) => [i, p]));
+  const wantRefs = S.pageOrder.map(s => bySrc.get(s.src).ref);
+  for (let i = 0; i < wantRefs.length; i++) {
+    const have = out.getPages().map(p => p.ref);
+    if (have[i] === wantRefs[i]) continue;
+    out.removePage(have.indexOf(wantRefs[i]));
+    out.insertPage(i, bySrc.get(S.pageOrder[i].src));
+  }
+  while (out.getPageCount() > wantRefs.length) out.removePage(out.getPageCount() - 1);
+  // 旋转 / 标注：旋转直接改 /Rotate（读原值 + 额外旋转），不再依赖 pdf.js 的页对象
   for (const s of S.pageOrder) {
-    if (!origRots.has(s.src)) origRots.set(s.src, (await S.pdfDoc.getPage(s.src + 1)).rotate);
+    const p = bySrc.get(s.src);
+    p.setRotation(PDFLib.degrees(((p.getRotation().angle + s.rot) % 360 + 360) % 360));
+    for (const a of (S.anns.get(s.src) || [])) drawAnn(p, a, fontObjs, helv, embeddedFonts, embeddedFk);
   }
-
-  S.pageOrder.forEach((slot, i) => {
-    const p = copied[i];
-    p.setRotation(PDFLib.degrees((origRots.get(slot.src) + slot.rot) % 360));
-    out.addPage(p);
-    for (const a of (S.anns.get(slot.src) || [])) drawAnn(p, a, fontObjs, helv, embeddedFonts, embeddedFk);
-  });
 
   return await out.save();
 }
@@ -188,6 +176,60 @@ function resolveFont(a, fontObjs, helv) {
   const f = fontObjs.get(fontFileFor(a));
   if (f) return f;
   return /[^\x00-\x7F]/.test(a.text || '') ? (fontObjs.get('NotoSansSC-Regular.otf') || helv) : helv;
+}
+
+// 收集改字标注用到的内嵌字体并重新嵌入（去重按 页面:字体名）
+async function collectEmbeddedFonts(out, embeddedFonts, embeddedFk) {
+  const perPage = new Map(); // src -> Set(fontName)
+  for (const list of S.anns.values()) for (const a of list) {
+    if (a.type !== 'edit' || !a.text) continue;
+    const fns = perPage.get(a.page) || perPage.set(a.page, new Set()).get(a.page);
+    if (a.runs) a.runs.forEach(r => { if (r.fontName && r.cur) fns.add(r.fontName); });
+    else if (a.fontName) fns.add(a.fontName);
+  }
+  for (const [src, fns] of perPage) for (const fn of fns) {
+    const key = src + ':' + fn;
+    if (embeddedFonts.has(key)) continue;
+    const data = await getEmbeddedFontData(src, fn);
+    if (!data) continue;
+    try {
+      embeddedFonts.set(key, await out.embedFont(data, { subset: true }));
+      embeddedFk.set(key, fontkit.create(data));
+    } catch (e) {
+      console.error('embedded font re-embed failed', fn, e);
+    }
+  }
+}
+
+// 替换文字优先用原 PDF 内嵌字体（字形全覆盖时），否则返回 null 让调用方回退系统字体。
+// vendored fontkit 没有 hasCharacter（调用即抛异常），用 glyphsForString 判 notdef（id 0）
+function pickRunFont(a, r, embeddedFonts, embeddedFk) {
+  const key = a.page + ':' + (r.fontName || '');
+  const fk = embeddedFk.get(key);
+  if (!fk || !embeddedFonts.has(key)) return null;
+  try {
+    const hasGlyph = ch => { const gs = fk.glyphsForString(ch); return gs.length > 0 && gs[0].id !== 0; };
+    return [...r.cur].every(hasGlyph) ? embeddedFonts.get(key) : null;
+  } catch (e) { return null; }
+}
+
+// 改字：涂白原文，再按 run 原位绘制（每个 run 用自己的 x/基线/字号/字体，保留原始布局）
+function drawEditAnn(page, a, fontObjs, helv, embeddedFonts, embeddedFk) {
+  for (const r of a.rects)
+    page.drawRectangle({ x: r[0], y: r[1], width: r[2] - r[0], height: r[3] - r[1], color: PDFLib.rgb(1, 1, 1) });
+  if (!a.text) return;
+  const sys = resolveFont(a, fontObjs, helv);
+  const runs = a.runs || [{
+    x: a.rects[0][0],
+    baselineY: a.baselineY != null ? a.baselineY : a.rects[0][1] + (a.rects[0][3] - a.rects[0][1]) * 0.22,
+    size: a.size, fontName: a.fontName, cur: a.text,
+  }];
+  for (const r of runs.filter(r => r.cur)) {
+    const font = pickRunFont(a, r, embeddedFonts, embeddedFk) || sys;
+    r.cur.split('\n').forEach((line, i) => {
+      page.drawText(line, { x: r.x, y: r.baselineY - i * r.size * 1.25, size: r.size, font, color: hexRgb(a.color || '#1a1a1a') });
+    });
+  }
 }
 
 function drawAnn(page, a, fontObjs, helv, embeddedFonts, embeddedFk) {
@@ -212,36 +254,7 @@ function drawAnn(page, a, fontObjs, helv, embeddedFonts, embeddedFk) {
       });
     }
   } else if (a.type === 'edit') {
-    // 涂白原文，再按原基线/字号/映射字体画替换文字
-    for (const r of a.rects) {
-      page.drawRectangle({ x: r[0], y: r[1], width: r[2] - r[0], height: r[3] - r[1], color: PDFLib.rgb(1, 1, 1) });
-    }
-    if (a.text) {
-      const sys = resolveFont(a, fontObjs, helv);
-      // 按 run 原位绘制：每个 run 用自己的 x/基线/字号/字体（保留原始布局）
-      const runs = a.runs || [{
-        x: a.rects[0][0],
-        baselineY: a.baselineY != null ? a.baselineY : a.rects[0][1] + (a.rects[0][3] - a.rects[0][1]) * 0.22,
-        size: a.size, fontName: a.fontName, cur: a.text,
-      }];
-      for (const r of runs) {
-        if (!r.cur) continue;
-        let font = sys;
-        const key = a.page + ':' + (r.fontName || '');
-        const fk = embeddedFk.get(key);
-        if (fk && embeddedFonts.has(key)) {
-          try {
-            // 字形覆盖检查：vendored fontkit 没有 hasCharacter（调用即抛异常→静默降级系统字体），
-            // 用 glyphsForString 判 notdef（id 0）
-            const hasGlyph = ch => { const gs = fk.glyphsForString(ch); return gs.length > 0 && gs[0].id !== 0; };
-            if ([...r.cur].every(hasGlyph)) font = embeddedFonts.get(key);
-          } catch (e) {}
-        }
-        r.cur.split('\n').forEach((line, i) => {
-          page.drawText(line, { x: r.x, y: r.baselineY - i * r.size * 1.25, size: r.size, font, color: hexRgb(a.color || '#1a1a1a') });
-        });
-      }
-    }
+    drawEditAnn(page, a, fontObjs, helv, embeddedFonts, embeddedFk);
   } else if (a.type === 'text' && a.text) {
     const lines = a.text.split('\n');
     const font = resolveFont(a, fontObjs, helv);

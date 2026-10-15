@@ -4,7 +4,7 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..'); // 部分脚本使用相对路径，必须在根目录跑
 let failed = 0;
-for (const s of ['verify-export-layout.js', 'repro-embed.js', 'verify-wrap.js', 'verify-save-session.js', 'verify-server.js']) {
+for (const s of ['verify-export-layout.js', 'repro-embed.js', 'verify-export-fidelity.js', 'verify-wrap.js', 'verify-save-session.js', 'verify-server.js']) {
   console.log(`\n===== ${s} =====`);
   const r = spawnSync(process.execPath, [path.join(__dirname, s)], { stdio: 'inherit', cwd: ROOT });
   if (r.status === 0) console.log(`✓ ${s} 通过`);

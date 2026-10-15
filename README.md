@@ -53,9 +53,11 @@ keep the first backup. The browser server listens only on `127.0.0.1`.
   thumbnail sidebar, opened from "⋯ → Reading & interface → Pages & outline"
   (takes effect on export).
 - **Export** — "💾 Export" saves a new PDF with all changes baked in; the original
-  file is untouched. Unsaved changes are guarded (orange dot + close confirmation),
-  and editing sessions autosave to IndexedDB — after a crash, the start page offers
-  to resume where you left off.
+  file is untouched. The exported file keeps the original's bookmarks, form
+  fields and file metadata (bookmarks pointing at deleted pages are simply
+  ignored by viewers). Unsaved changes are guarded (orange dot + close
+  confirmation), and editing sessions autosave to IndexedDB — after a crash, the
+  start page offers to resume where you left off.
 
 ## Structure
 
