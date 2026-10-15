@@ -10,6 +10,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-single-instance = "2"
+tauri-plugin-window-state = "2"
 rfd = "0.15"
 base64 = "0.22"
 

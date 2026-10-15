@@ -22,7 +22,8 @@ npm run build   # NSIS installer in src-tauri/target/release/bundle/nsis/
 
 Both editions share the same `app/` frontend. The desktop edition adds a custom title
 bar, Ctrl+S write-back to the original file (automatic `.bak` backup on the first
-overwrite), `.pdf` file association, single instance, and native dialogs.
+overwrite), `.pdf` file association, single instance, native dialogs, and it remembers
+the window size and position across launches.
 Write-back completes in a temporary file before replacing the original; later saves
 keep the first backup. The browser server listens only on `127.0.0.1`.
 

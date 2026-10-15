@@ -123,6 +123,7 @@ fn startup_pdf_path() -> Result<Option<String>, String> {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             // 第二次启动（含双击 .pdf 文件关联）：把文件路径转给已运行实例
             if let Some(path) = pdf_path_from_args(&argv, std::path::Path::new(&cwd)) {
